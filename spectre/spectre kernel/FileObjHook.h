@@ -10,8 +10,7 @@
 
 typedef enum HookType
 {
-	DirectHook,	// A direct hook indicates that the FileObjHook should simply set the IRP_MJ_DEVICE_CONTROL entry of the DriverObject to the hook function.
-	JmpRcxHook	// A JMP RCX hook indicates that the FileObjHook should attempt to find a "jmp rcx" instruction, set the IRP_MJ_DEVICE_CONTROL entry to that gadget, and set the device object to the hook function.
+	DirectHook	// A direct hook indicates that the FileObjHook should simply set the IRP_MJ_DEVICE_CONTROL entry of the DriverObject to the hook function.
 } HOOK_TYPE;
 
 typedef NTSTATUS
@@ -40,16 +39,22 @@ typedef class FileObjHook
 		);
 
 	BOOLEAN SearchAndHook (
-		_In_ PWCHAR TargetDeviceName
+		_In_ PWCHAR TargetDeviceName,
+		_Inout_ ULONG* HookCount
 		);
 
 	BOOLEAN GenerateHookObjects (
-		_In_ PDRIVER_OBJECT BaseDriverObject
+		_In_ PDEVICE_OBJECT BaseDeviceObject,
+		_Inout_ PDEVICE_OBJECT* NewDeviceObject
 		);
 
 	static NTSTATUS DispatchHook (
 		_In_ PDEVICE_OBJECT DeviceObject,
 		_Inout_ PIRP Irp
+		);
+
+	static VOID RehookThread(
+		_In_ PVOID Arg1
 		);
 
 	//
@@ -61,21 +66,17 @@ typedef class FileObjHook
 	//
 	static PHOOK_DISPATCH HookFunction;
 	//
-	// The hooked version of the target device object.
+	// The original device object before hooking.
 	//
-	PDRIVER_OBJECT FakeDriverObject;
+	static PDEVICE_OBJECT OriginalDeviceObject;
 	//
-	// The original driver object before hooking.
+	// The original driver dispatch functions.
 	//
-	static PDRIVER_OBJECT OriginalDriverObject;
+	static PDRIVER_DISPATCH OriginalDispatch[IRP_MJ_MAXIMUM_FUNCTION + 1];
 	//
-	// The original driver dispatch function.
+	// Whether or not the scanning thread was started.
 	//
-	static PDRIVER_DISPATCH OriginalDispatch;
-	//
-	// The last time hooks were updated.
-	//
-	static LARGE_INTEGER LastHookTime;
+	BOOLEAN RescanThreadStarted;
 public:
 	//
 	// Whether or not there is an ongoing hook.
@@ -97,6 +98,7 @@ public:
 #define DEVICE_OBJECT_TAG 'iveD'
 #define DRIVER_OBJECT_TAG 'virD'
 
-#define SYSTEM_TIME_TO_SECONDS(systemtime) systemtime.QuadPart / 10000000
+#define SYSTEMTIME_TO_SECONDS(systemtime) systemtime.QuadPart / 10000000
+#define SECONDS_TO_SYSTEMTIME(seconds) seconds * 10000000
 
 extern PFILE_OBJ_HOOK CurrentObjHook;

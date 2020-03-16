@@ -17,5 +17,7 @@
 #define SCAST static_cast
 #define CCAST const_cast
 
+#define FlagOn(_F,_SF) ((_F) & (_SF))
+
 void* __cdecl operator new(size_t size, POOL_TYPE pool, ULONG tag = 0);
 void __cdecl operator delete(void* p, unsigned __int64);

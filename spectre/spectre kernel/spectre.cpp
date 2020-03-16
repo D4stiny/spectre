@@ -60,6 +60,7 @@ NTSTATUS HookIoctl (
 
 	return status;
 }
+
 //
 //VOID
 //DriverUnload (
@@ -91,8 +92,6 @@ DriverEntry (
 	//
 	UNREFERENCED_PARAMETER(DriverObject);
 	UNREFERENCED_PARAMETER(RegistryPath);
-
 	DeviceHook = new (NonPagedPool, 'hFpS') FileObjHook(L"Afd", DirectHook, HookIoctl);
-
 	return STATUS_SUCCESS;
 }

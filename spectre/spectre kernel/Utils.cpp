@@ -7,28 +7,38 @@
 #include "Utils.h"
 
 /**
-	Determine the address and size of a kernel module's ".text" section.
+	Determine the address and size of a kernel module's next executable section.
 	@param ImageBase - Image base of the kernel module.
-	@param TextSectionBase - Caller-allocated variable to store the ".text" section base.
-	@param TextSectionSize - Caller-allocated variable to store the ".text" section size.
+	@param ExecSectionBase - Caller-allocated variable to indicate the first section to start searching from and store the next executable section base.
+	@param ExecSectionSize - Caller-allocated variable to store the next executable section size.
 	@return Status of the section search.
 */
 NTSTATUS
-Utilities::FindModuleTextSection (
+Utilities::FindNextExecSection (
 	_In_ PVOID ImageBase,
-	_Inout_ PVOID* TextSectionBase,
-	_Inout_ SIZE_T* TextSectionSize
+	_Inout_ PVOID* ExecSectionBase,
+	_Inout_ SIZE_T* ExecSectionSize
 	)
 {
 	NTSTATUS status;
 	PIMAGE_DOS_HEADER driverDosHeader;
 	PIMAGE_NT_HEADERS_C driverNtHeader;
 	PIMAGE_SECTION_HEADER driverSectionHeader;
+	BOOLEAN foundStartSectionBase;
 	ULONG i;
+	PVOID currentSectionBase;
 
 	status = STATUS_SUCCESS;
-	*TextSectionBase = NULL;
-	*TextSectionSize = 0;
+	*ExecSectionSize = 0;
+	foundStartSectionBase = FALSE;
+
+	//
+	// Check if a starting section was specified. If not, return the first section.
+	//
+	if (*ExecSectionBase == NULL)
+	{
+		foundStartSectionBase = TRUE;
+	}
 
 	driverDosHeader = RCAST<PIMAGE_DOS_HEADER>(ImageBase);
 	if (driverDosHeader->e_magic != IMAGE_DOS_SIGNATURE)
@@ -53,10 +63,16 @@ Utilities::FindModuleTextSection (
 	//
 	for (i = 0; i < driverNtHeader->FileHeader.NumberOfSections; i++)
 	{
-		if (_stricmp(reinterpret_cast<const char*>(&driverSectionHeader[i].Name), ".text") == 0)
+		currentSectionBase = RCAST<PVOID>(RCAST<ULONG_PTR>(driverDosHeader) + driverSectionHeader[i].VirtualAddress);
+		if (foundStartSectionBase == FALSE && currentSectionBase == *ExecSectionBase)
 		{
-			*TextSectionBase = RCAST<PVOID>(RCAST<ULONG_PTR>(driverDosHeader) + driverSectionHeader[i].VirtualAddress);
-			*TextSectionSize = driverSectionHeader[i].SizeOfRawData;
+			foundStartSectionBase = TRUE;
+			continue;
+		}
+		else if (foundStartSectionBase && FlagOn(driverSectionHeader[i].Characteristics, IMAGE_SCN_MEM_EXECUTE))
+		{
+			*ExecSectionBase = currentSectionBase;
+			*ExecSectionSize = driverSectionHeader[i].SizeOfRawData;
 			break;
 		}
 	}
@@ -104,4 +120,55 @@ Utilities::CompareData (
 		if (*Mask == 'x' && *Data != *Pattern)
 			return FALSE;
 	return (*Mask) == 0;
+}
+
+/**
+	Enumerate executable sections in ImpersonateDriver and find a "jmp rcx" gadget.
+	If found, create a new thread at that gadget location, to spoof the start address of the thread.
+	Set the first argument (rcx register) passed to the thread to be the actual thread function, which the gadget willl jump to.
+*/
+BOOLEAN
+Utilities::CreateHiddenThread (
+	_In_ PDRIVER_OBJECT ImpersonateDriver,
+	_In_ PVOID ThreadFunction
+	)
+{
+	NTSTATUS status;
+	HANDLE threadHandle;
+	PVOID jmpRcxGadget;
+	PVOID currentExecutableSection;
+	SIZE_T currentExecutableSectionSize;
+
+	jmpRcxGadget = NULL;
+	currentExecutableSection = NULL;
+
+	//
+	// Enumerate each executable of the ImpersonateDriver to look for a "jmp rcx" (0xFF, 0xE1) gadget.
+	//
+	while (NT_SUCCESS(Utilities::FindNextExecSection(ImpersonateDriver->DriverStart, &currentExecutableSection, &currentExecutableSectionSize)) && jmpRcxGadget == NULL)
+	{
+		jmpRcxGadget = FindPattern(currentExecutableSection, currentExecutableSectionSize, "\xFF\xE1", "xx");
+	}
+
+	//
+	// Check if we were able to find a gadget.
+	//
+	if (jmpRcxGadget == NULL)
+	{
+		DBGPRINT("Utilities!CreateHiddenThread: Failed to find a \"jmp rcx\" gadget in the driver %wZ.", ImpersonateDriver->DriverName);
+		return FALSE;
+	}
+
+	//
+	// Create a system thread on the "jmp rcx" gadget with the actual thread function as the first argument (rcx register).
+	//
+	status = PsCreateSystemThread(&threadHandle, 0, NULL, 0, NULL, RCAST<PKSTART_ROUTINE>(jmpRcxGadget), ThreadFunction);
+	if (NT_SUCCESS(status) == FALSE)
+	{
+		DBGPRINT("Utilities!CreateHiddenThread: Failed to create system thread with status 0x%X.", status);
+		return FALSE;
+	}
+	
+	ZwClose(threadHandle);
+	return TRUE;
 }
