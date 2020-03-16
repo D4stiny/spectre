@@ -97,11 +97,13 @@
     <ClCompile Include="common.cpp" />
     <ClCompile Include="FileObjHook.cpp" />
     <ClCompile Include="spectre.cpp" />
+    <ClCompile Include="Utils.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="common.h" />
     <ClInclude Include="FileObjHook.h" />
     <ClInclude Include="ntdef.h" />
+    <ClInclude Include="Utils.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

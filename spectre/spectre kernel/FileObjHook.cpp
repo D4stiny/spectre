@@ -6,19 +6,36 @@
  */
 #include "FileObjHook.h"
 
+//
+// Static variables.
+//
+HOOK_TYPE FileObjHook::HookType;
+PHOOK_DISPATCH FileObjHook::HookFunction;
+PDRIVER_DISPATCH FileObjHook::OriginalDispatch;
+PDRIVER_OBJECT FileObjHook::OriginalDriverObject;
+LARGE_INTEGER FileObjHook::LastHookTime;
+
+//
+// Represents the current hook object needed by the dispatch function.
+//
+PFILE_OBJ_HOOK CurrentObjHook;
+
 /**
 	Initialize the FileObjHook class.
 	@param TargetDeviceName - The name of the target device to hook.
-	@param HookType - Method of hooking.
-	@param HookFunction - The function to redirect IRP_MJ_DEVICE_CONTROL to.
+	@param Type - Method of hooking.
+	@param Hook - The function to redirect IRP_MJ_DEVICE_CONTROL to.
 */
 FileObjHook::FileObjHook (
 	_In_ PWCHAR TargetDeviceName,
-	_In_ HOOK_TYPE HookType,
-	_In_ HOOK_DISPATCH HookFunction
+	_In_ HOOK_TYPE Type,
+	_In_ HOOK_DISPATCH Hook
 	)
 {
-	this->SearchAndHook(TargetDeviceName, HookType, HookFunction);
+	this->HookType = Type;
+	this->HookFunction = Hook;
+	CurrentObjHook = this;
+	this->SearchAndHook(TargetDeviceName);
 }
 
 /**
@@ -55,7 +72,7 @@ FileObjHook::IsHandleFile (
 	//
 	// Allocate the appropriate type information.
 	//
-	objectType = RCAST<POBJECT_TYPE_INFORMATION>(ExAllocatePoolWithTag(PagedPool, objectTypeSize, OBJECT_TYPE_TAG));
+	objectType = SCAST<POBJECT_TYPE_INFORMATION>(ExAllocatePoolWithTag(PagedPool, objectTypeSize, OBJECT_TYPE_TAG));
 	if (objectType == NULL)
 	{
 		DBGPRINT("FileObjHook!IsHandleFile: Failed to allocate %i bytes for object type size.", objectTypeSize);
@@ -107,15 +124,11 @@ Exit:
 /**
 	Search for handles to a file object and hook objects that match TargetDeviceName.
 	@param TargetDeviceName - The name of the target device to hook.
-	@param HookType - Method of hooking.
-	@param HookFunction - The function to redirect IRP_MJ_DEVICE_CONTROL to.
 	@return Whether hooking was successful.
 */
 BOOLEAN
 FileObjHook::SearchAndHook (
-	_In_ PWCHAR TargetDeviceName,
-	_In_ HOOK_TYPE HookType,
-	_In_ HOOK_DISPATCH HookFunction
+	_In_ PWCHAR TargetDeviceName
 	)
 {
 	NTSTATUS status;
@@ -191,6 +204,11 @@ FileObjHook::SearchAndHook (
 		}
 
 		currentFileObject = SCAST<PFILE_OBJECT>(currentSystemHandle.Object);
+		if (currentFileObject->Size != sizeof(FILE_OBJECT))
+		{
+			DBGPRINT("FileObjHook!SearchAndHook: FILE_OBJECT 0x%llx has invalid size 0x%X.", currentFileObject, currentFileObject->Size);
+			continue;
+		}
 
 		//
 		// TODO: Add a try/catch wrapper around the following to prevent race condition issues.
@@ -205,9 +223,15 @@ FileObjHook::SearchAndHook (
 		//
 		// Check if this is the device we're after.
 		//
-		if (currentFileObject->DeviceObject->DriverObject && wcscmp(fileDeviceName->Name.Buffer, TargetDeviceName) == 0)
+		if (fileDeviceName && fileDeviceName->Name.Buffer && currentFileObject->DeviceObject->DriverObject && wcscmp(fileDeviceName->Name.Buffer, TargetDeviceName) == 0)
 		{
-			DBGPRINT("FileObjHook!SearchAndHook: Found a target device with name %wZ and device object 0x%llx.", fileDeviceName->Name, currentFileObject->DeviceObject);
+			DBGPRINT("FileObjHook!SearchAndHook: Found a target device with name %wZ and device object 0x%llx, hooking.", fileDeviceName->Name, currentFileObject->DeviceObject);
+			if (this->HookFileObject(currentFileObject) == FALSE)
+			{
+				DBGPRINT("FileObjHook!SearchAndHook: Failed to hook FILE_OBJECT 0x%llx.", currentFileObject);
+				continue;
+			}
+			DBGPRINT("FileObjHook!SearchAndHook: Hooked FILE_OBJECT 0x%llx.", currentFileObject);
 		}
 	}
 Exit:
@@ -216,4 +240,183 @@ Exit:
 		ExFreePoolWithTag(systemHandleInformation, HANDLE_INFO_TAG);
 	}
 	return NT_SUCCESS(status);
+}
+
+/**
+	Generate a fake DRIVER_OBJECT that has IRP_MJ_DEVICE_CONTROL hooked.
+	@param BaseDriverObject - The driver object to copy.
+	@return Whether the objects were generated successfully.
+*/
+BOOLEAN
+FileObjHook::GenerateHookObjects (
+	_In_ PDRIVER_OBJECT BaseDriverObject
+	)
+{
+	NTSTATUS status;
+	PVOID driverTextBase;
+	SIZE_T driverTextSize;
+	PVOID driverJmpGadget;
+
+	this->OriginalDispatch = NULL;
+
+	//
+	// Allocate space for the fake DRIVER_OBJECT.
+	//
+	this->FakeDriverObject = SCAST<PDRIVER_OBJECT>(ExAllocatePoolWithTag(NonPagedPoolNx, BaseDriverObject->Size, DRIVER_OBJECT_TAG));
+	if (this->FakeDriverObject == NULL)
+	{
+		DBGPRINT("FileObjHook!GenerateHookObjects: Could not allocate %i bytes for a fake driver object.", BaseDriverObject->Size);
+		return FALSE;
+	}
+
+	//
+	// Copy the existing object.
+	//
+	memcpy(this->FakeDriverObject, BaseDriverObject, BaseDriverObject->Size);
+
+	//
+	// Hook the device control entry of the MajorFunction member.
+	//
+	switch (this->HookType)
+	{
+	case DirectHook:
+		//
+		// For a direct hook, simply replace the IRP_MJ_DEVICE_CONTROL major function with the hook function.
+		//
+		this->OriginalDispatch = reinterpret_cast<PDRIVER_DISPATCH>(InterlockedExchange64(RCAST<PLONG64>(&this->FakeDriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL]), RCAST<LONG64>(this->DispatchHook)));
+		break;
+	case JmpRcxHook:
+		//
+		// Query the ".text" section of the driver to find a "jmp rcx" gadget.
+		//
+		status = Utilities::FindModuleTextSection(BaseDriverObject->DriverStart, &driverTextBase, &driverTextSize);
+		if (NT_SUCCESS(status) == FALSE)
+		{
+			DBGPRINT("FileObjHook!GenerateHookObjects: Failed to find the \".text\" section of the %wZ driver.", BaseDriverObject->DriverName);
+			break;
+		}
+
+		//
+		// Search for the bytes 0xFF and 0xE1 which is simply an assembled version of "jmp rcx".
+		//
+		driverJmpGadget = Utilities::FindPattern(driverTextBase, driverTextSize, "\xFF\xE1", "xx");
+		if (driverJmpGadget == NULL)
+		{
+			DBGPRINT("FileObjHook!GenerateHookObjects: Failed to find a \"jmp rcx\" gadget in the \".text\" section of the %wZ driver.", BaseDriverObject->DriverName);
+			break;
+		}
+
+		//
+		// First, set the IRP_MJ_DEVICE_CONTROL major function to point at the "jmp rcx" gadget.
+		// This means that when DeviceIoControl is called, it will call "jmp rcx", which in turn
+		// calls the first argument (aka rcx). The first argument of DRIVER_DISPATCH is the
+		// DriverObject's DeviceObject, which we can control. We simply need to store the old
+		// DeviceObject to pass to any hooks or the original function.
+		//
+		this->OriginalDispatch = reinterpret_cast<PDRIVER_DISPATCH>(InterlockedExchange64(RCAST<PLONG64>(&this->FakeDriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL]), RCAST<LONG64>(driverJmpGadget)));
+		//
+		// Set a DeviceObject value pointing at our hook function.
+		//
+		this->FakeDriverObject->DeviceObject = RCAST<PDEVICE_OBJECT>(this->DispatchHook);
+		break;
+	}
+
+	return this->FakeDriverObject != NULL && this->OriginalDispatch != NULL;
+}
+
+/**
+	Hook a target file object.
+	@param FileObject - The file object to hook.
+	@return Whether hooking was successful.
+*/
+BOOLEAN
+FileObjHook::HookFileObject (
+	_In_ PFILE_OBJECT FileObject
+	)
+{
+	//
+	// Check if we need to generate the hook objects such as the fake driver object.
+	//
+	if (this->FakeDriverObject == NULL || this->OriginalDispatch == NULL)
+	{
+		if (this->GenerateHookObjects(FileObject->DeviceObject->DriverObject) == FALSE)
+		{
+			DBGPRINT("FileObjHook!HookFileObject: Failed to generate hook objects, aborting.");
+			return FALSE;
+		}
+	}
+
+	//
+	// Check if we've already hooked this FILE_OBJECT.
+	//
+	else if (FileObject->DeviceObject->DriverObject == this->FakeDriverObject)
+	{
+		return TRUE;
+	}
+
+	//
+	// Atomically hook the device object of the file.
+	//
+	this->OriginalDriverObject = reinterpret_cast<PDRIVER_OBJECT>(InterlockedExchange64(RCAST<PLONG64>(&FileObject->DeviceObject->DriverObject), RCAST<LONG64>(this->FakeDriverObject)));
+	return TRUE;
+}
+
+/**
+	The base hook for all hooks. Necessary to call the HookFunction with proper arguments such as the original DEVICE_OBJECT.
+	@param DeviceObject - The alleged DeviceObject for the IRP_MJ_DEVICE_CONTROL call. May not be correct.
+	@param Irp - The IRP for the IRP_MJ_DEVICE_CONTROL call.
+	@return The status of the IRP_MJ_DEVICE_CONTROL call.
+*/
+NTSTATUS
+FileObjHook::DispatchHook (
+	_In_ PDEVICE_OBJECT DeviceObject,
+	_Inout_ PIRP Irp
+	)
+{
+	LARGE_INTEGER currentTime;
+	PDEVICE_OBJECT actualDeviceObject;
+	POBJECT_HEADER_NAME_INFO fileDeviceName;
+
+	actualDeviceObject = NULL;
+
+	switch (FileObjHook::HookType)
+	{
+	case DirectHook:
+		//
+		// For a direct hook, we can just pass the same arguments we got to the HookFunction.
+		//
+		actualDeviceObject = DeviceObject;
+		break;
+	case JmpRcxHook:
+		//
+		// For a "jmp rcx" hook, we need to pass the real DeviceObject value.
+		//
+		actualDeviceObject = FileObjHook::OriginalDriverObject->DeviceObject;
+		break;
+	}
+
+	//
+	// Check if it's been the HOOK_UPDATE_TIME time interval since the last hook update.
+	//
+	KeQuerySystemTime(&currentTime);
+	if (SYSTEM_TIME_TO_SECONDS(currentTime) - SYSTEM_TIME_TO_SECONDS(FileObjHook::LastHookTime) > HOOK_UPDATE_TIME)
+	{
+		DBGPRINT("FileObjHook!DispatchHook: Detected time interval %i elapsed, rehooking.", HOOK_UPDATE_TIME);
+		//
+		// Query the name of the associated DEVICE_OBJECT.
+		//
+		fileDeviceName = SCAST<POBJECT_HEADER_NAME_INFO>(ObQueryNameInfo(actualDeviceObject));
+
+		//
+		// Search for new objects and hook those as well.
+		//
+		CurrentObjHook->SearchAndHook(fileDeviceName->Name.Buffer);
+
+		//
+		// Update the last hook time.
+		//
+		FileObjHook::LastHookTime = currentTime;
+	}
+
+	return FileObjHook::HookFunction(FileObjHook::OriginalDispatch, actualDeviceObject, Irp);
 }
