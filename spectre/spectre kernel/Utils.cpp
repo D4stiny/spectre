@@ -172,3 +172,69 @@ Utilities::CreateHiddenThread (
 	ZwClose(threadHandle);
 	return TRUE;
 }
+
+/**
+	Get the system module information for a module specified by the name ModuleName.
+	@param ModuleName - The name of the target system module.
+	@return The target system module information. Will be empty if not found.
+*/
+CONST RTL_PROCESS_MODULE_INFORMATION
+Utilities::GetDriverModule (
+	_In_ CONST CHAR* ModuleName
+	)
+{
+	NTSTATUS status;
+	RTL_PROCESS_MODULE_INFORMATION driverModuleInformation;
+	RTL_PROCESS_MODULE_INFORMATION currentModule;
+	PRTL_PROCESS_MODULES systemModuleList;
+	ULONG neededSize;
+	ULONG i;
+
+	memset(&driverModuleInformation, 0, sizeof(driverModuleInformation));
+	neededSize = 0;
+
+	//
+	// Query the bytes required to query system modules.
+	//
+	ZwQuerySystemInformation(SystemModuleInformation, &neededSize, 0, &neededSize);
+
+	//
+	// Allocate space for modules.
+	//
+	systemModuleList = RCAST<PRTL_PROCESS_MODULES>(ExAllocatePool(NonPagedPoolNx, neededSize));
+	if (systemModuleList == NULL)
+	{
+		DBGPRINT("Utilities!GetDriverModule: Failed to allocate space for system module list.");
+		status = STATUS_NO_MEMORY;
+		goto Exit;
+	}
+
+	//
+	// Query the system modules.
+ 	//
+	status = ZwQuerySystemInformation(SystemModuleInformation, systemModuleList, neededSize, NULL);
+	if (NT_SUCCESS(status) == FALSE)
+	{
+		DBGPRINT("Utilities!GetDriverModule: Failed to query the system module list with status 0x%X.", status);
+		goto Exit;
+	}
+
+	//
+	// Enumerate each system module for a match.
+	//
+	for (i = 0; i < systemModuleList->NumberOfModules; i++)
+	{
+		currentModule = systemModuleList->Modules[i];
+		if(strstr(RCAST<CONST CHAR*>(currentModule.FullPathName), ModuleName) != NULL)
+		{
+			driverModuleInformation = currentModule;
+			break;
+		}
+	}
+Exit:
+	if (NT_SUCCESS(status) == FALSE && systemModuleList)
+	{
+		ExFreePool(systemModuleList);
+	}
+	return driverModuleInformation;
+}

@@ -17,6 +17,10 @@ typedef unsigned short WORD;
 EXTERN_C_START
 NTKERNELAPI NTSTATUS ZwQuerySystemInformation(ULONG InfoClass, PVOID Buffer, ULONG Length, PULONG ReturnLength);
 NTKERNELAPI PVOID ObQueryNameInfo(_In_ PVOID Object);
+NTKERNELAPI NTSTATUS ObCreateObject(__in KPROCESSOR_MODE ProbeMode, __in POBJECT_TYPE ObjectType, __in POBJECT_ATTRIBUTES ObjectAttributes, __in KPROCESSOR_MODE OwnershipMode, __inout_opt PVOID ParseContext, __in ULONG ObjectBodySize, __in ULONG PagedPoolCharge, __in ULONG NonPagedPoolCharge, __out PVOID* Object);
+__declspec(dllimport) POBJECT_TYPE* IoDriverObjectType;
+__declspec(dllimport) POBJECT_TYPE* IoDeviceObjectType;
+NTKERNELAPI VOID IoDeleteDriver(IN PDRIVER_OBJECT DriverObject);
 EXTERN_C_END
 
 typedef struct _SYSTEM_HANDLE {
@@ -309,3 +313,135 @@ typedef struct _IMAGE_NT_HEADERS {
   _AFD_CONTROL_CODE(AFD_VALIDATE_GROUP, METHOD_NEITHER)
 
 #define IMAGE_SCN_MEM_EXECUTE 0x20000000
+
+typedef struct _EXTENDED_DRIVER_EXTENSION
+{
+	struct _DRIVER_OBJECT* DriverObject;
+	PDRIVER_ADD_DEVICE AddDevice;
+	ULONG Count;
+	UNICODE_STRING ServiceKeyName;
+	PVOID ClientDriverExtension;
+	PFS_FILTER_CALLBACKS FsFilterCallbacks;
+} EXTENDED_DRIVER_EXTENSION, * PEXTENDED_DRIVER_EXTENSION;
+
+//
+// Extended Device Object Extension Structure
+//
+typedef struct _EXTENDED_DEVOBJ_EXTENSION
+{
+	CSHORT Type;
+	USHORT Size;
+	PDEVICE_OBJECT DeviceObject;
+	ULONG PowerFlags;
+	struct _DEVICE_OBJECT_POWER_EXTENSION* Dope;
+	ULONG ExtensionFlags;
+	struct _DEVICE_NODE* DeviceNode;
+	PDEVICE_OBJECT AttachedTo;
+	LONG StartIoCount;
+	LONG StartIoKey;
+	ULONG StartIoFlags;
+	struct _VPB* Vpb;
+} EXTENDED_DEVOBJ_EXTENSION, * PEXTENDED_DEVOBJ_EXTENSION;
+
+// This structure is not correct on Windows 7, but the offsets we need are still correct.
+typedef struct _OBJECT_HEADER
+{
+	LONG PointerCount;
+	union
+	{
+		LONG HandleCount;
+		PVOID NextToFree;
+	};
+	EX_PUSH_LOCK Lock;
+	UCHAR TypeIndex;
+	union
+	{
+		UCHAR TraceFlags;
+		struct
+		{
+			UCHAR DbgRefTrace : 1;
+			UCHAR DbgTracePermanent : 1;
+			UCHAR Reserved : 6;
+		} bar;
+	};
+	UCHAR InfoMask;
+	union
+	{
+		UCHAR Flags;
+		struct
+		{
+			UCHAR NewObject : 1;
+			UCHAR KernelObject : 1;
+			UCHAR KernelOnlyAccess : 1;
+			UCHAR ExclusiveObject : 1;
+			UCHAR PermanentObject : 1;
+			UCHAR DefaultSecurityQuota : 1;
+			UCHAR SingleHandleEntry : 1;
+			UCHAR DeletedInline : 1;
+		} foo;
+	};
+	union
+	{
+		PVOID ObjectCreateInfo;
+		PVOID QuotaBlockCharged;
+	};
+	PVOID SecurityDescriptor;
+	QUAD Body;
+} OBJECT_HEADER, * POBJECT_HEADER;
+
+#if (defined _M_X64) || (defined _M_ARM64)
+C_ASSERT(FIELD_OFFSET(OBJECT_HEADER, Body) == 0x030);
+C_ASSERT(sizeof(OBJECT_HEADER) == 0x038);
+#else
+C_ASSERT(FIELD_OFFSET(OBJECT_HEADER, Body) == 0x018);
+C_ASSERT(sizeof(OBJECT_HEADER) == 0x020);
+#endif
+
+#define OBJECT_TO_OBJECT_HEADER(Object) CONTAINING_RECORD((Object), OBJECT_HEADER, Body)
+#define GET_OB_HEADER_COOKIE(Object) OBJECT_TO_OBJECT_HEADER(Object)->TypeIndex ^ (RCAST<ULONG64>(OBJECT_TO_OBJECT_HEADER(Object)) >> 8)
+
+typedef struct _RTL_PROCESS_MODULE_INFORMATION
+{
+	HANDLE Section;
+	PVOID MappedBase;
+	PVOID ImageBase;
+	ULONG ImageSize;
+	ULONG Flags;
+	USHORT LoadOrderIndex;
+	USHORT InitOrderIndex;
+	USHORT LoadCount;
+	USHORT OffsetToFileName;
+	UCHAR  FullPathName[256];
+} RTL_PROCESS_MODULE_INFORMATION, * PRTL_PROCESS_MODULE_INFORMATION;
+
+typedef struct _RTL_PROCESS_MODULES
+{
+	ULONG NumberOfModules;
+	RTL_PROCESS_MODULE_INFORMATION Modules[1];
+} RTL_PROCESS_MODULES, * PRTL_PROCESS_MODULES;
+
+typedef enum _SYSTEM_INFORMATION_CLASS
+{
+	SystemBasicInformation,
+	SystemProcessorInformation,
+	SystemPerformanceInformation,
+	SystemTimeOfDayInformation,
+	SystemPathInformation,
+	SystemProcessInformation,
+	SystemCallCountInformation,
+	SystemDeviceInformation,
+	SystemProcessorPerformanceInformation,
+	SystemFlagsInformation,
+	SystemCallTimeInformation,
+	SystemModuleInformation
+} SYSTEM_INFORMATION_CLASS, * PSYSTEM_INFORMATION_CLASS;
+
+typedef struct _PARTIAL_OBJECT_TYPE
+{
+	LIST_ENTRY TypeList;
+	UNICODE_STRING Name;
+	PVOID DefaultObject;
+	ULONG Index;
+} PARTIAL_OBJECT_TYPE, *PPARTIAL_OBJECT_TYPE;
+
+#define MAX_OBJECT_TYPE_INDEX 64  // As of Windows 10 there are 64 object types.

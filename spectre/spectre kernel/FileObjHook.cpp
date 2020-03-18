@@ -13,6 +13,7 @@ HOOK_TYPE FileObjHook::HookType;
 PHOOK_DISPATCH FileObjHook::HookFunction;
 PDRIVER_DISPATCH FileObjHook::OriginalDispatch[IRP_MJ_MAXIMUM_FUNCTION + 1];
 PDEVICE_OBJECT FileObjHook::OriginalDeviceObject;
+PDEVICE_OBJECT FileObjHook::FakeDeviceObject;
 
 //
 // Represents the current hook object needed by the dispatch function.
@@ -247,13 +248,13 @@ FileObjHook::SearchAndHook (
 		//
 		if (MmIsAddressValid(fileDeviceName) && MmIsAddressValid(fileDeviceName->Name.Buffer) && currentFileObject->DeviceObject->DriverObject && wcscmp(fileDeviceName->Name.Buffer, TargetDeviceName) == 0)
 		{
-			DBGPRINT("FileObjHook!SearchAndHook: Found a target device with name %wZ and device object 0x%llx, hooking.", fileDeviceName->Name, currentFileObject->DeviceObject);
+			//DBGPRINT("FileObjHook!SearchAndHook: Found a target device with name %wZ and device object 0x%llx, hooking.", fileDeviceName->Name, currentFileObject->DeviceObject);
 			if (this->HookFileObject(currentFileObject) == FALSE)
 			{
 				DBGPRINT("FileObjHook!SearchAndHook: Failed to hook FILE_OBJECT 0x%llx.", currentFileObject);
 				continue;
 			}
-			DBGPRINT("FileObjHook!SearchAndHook: Hooked FILE_OBJECT 0x%llx.", currentFileObject);
+			//DBGPRINT("FileObjHook!SearchAndHook: Hooked FILE_OBJECT 0x%llx.", currentFileObject);
 			(*HookCount)++;
 
 			//
@@ -284,55 +285,94 @@ Exit:
 /**
 	Generate a fake DRIVER_OBJECT that has IRP_MJ_DEVICE_CONTROL hooked.
 	@param BaseDeviceObject - The device object to copy.
-	@param NewDeviceObject - Caller-allocated variable to store the newly allocated device object.
 	@return Whether the objects were generated successfully.
 */
 BOOLEAN
 FileObjHook::GenerateHookObjects (
-	_In_ PDEVICE_OBJECT BaseDeviceObject,
-	_Inout_ PDEVICE_OBJECT* NewDeviceObject
+	_In_ PDEVICE_OBJECT BaseDeviceObject
 	)
 {
+	NTSTATUS status;
 	PDRIVER_OBJECT fakeDriverObject;
-	PDEVICE_OBJECT fakeDeviceObject;
-	PVOID driverJmpGadget;
+	OBJECT_ATTRIBUTES fakeDriverAttributes;
+	CSHORT fakeDriverObjectSize;
+
+	OBJECT_ATTRIBUTES fakeDeviceAttributes;
+	POBJECT_HEADER_NAME_INFO realDeviceNameHeader;
+
 	ULONG i;
 
-	driverJmpGadget = NULL;
+	//
+	// Generate the object attributes for the fake driver object.
+	//
+	InitializeObjectAttributes(&fakeDriverAttributes,
+							   &BaseDeviceObject->DriverObject->DriverName,
+							   OBJ_PERMANENT | OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+							   NULL,
+							   NULL);
 
-	memset(&FileObjHook::OriginalDispatch, 0, sizeof(FileObjHook::OriginalDispatch));
+	fakeDriverObjectSize = sizeof(DRIVER_OBJECT) + sizeof(EXTENDED_DRIVER_EXTENSION);
 
 	//
-	// Allocate space for the fake DRIVER_OBJECT.
+	// These two object types must be valid.
 	//
-	fakeDriverObject = SCAST<PDRIVER_OBJECT>(ExAllocatePoolWithTag(NonPagedPoolNx, BaseDeviceObject->DriverObject->Size, DRIVER_OBJECT_TAG));
-	if (fakeDriverObject == NULL)
+	NT_ASSERT(*IoDriverObjectType);
+	NT_ASSERT(*IoDeviceObjectType);
+	
+	//
+	// Create the fake driver object.
+	//
+	status = ObCreateObject(KernelMode, *IoDriverObjectType, &fakeDriverAttributes, KernelMode, NULL, fakeDriverObjectSize, 0, 0, RCAST<PVOID*>(&fakeDriverObject));
+	if (NT_SUCCESS(status) == FALSE)
 	{
-		DBGPRINT("FileObjHook!GenerateHookObjects: Could not allocate %i bytes for a fake driver object.", BaseDeviceObject->DriverObject->Size);
-		return FALSE;
+		DBGPRINT("FileObjHook!GenerateHookObjects: Failed to create the fake driver object with status 0x%X.", status);
+		goto Exit;
 	}
 
 	//
-	// Allocate space for the fake DEVICE_OBJECT.
+	// Copy the existing object.
 	//
-	fakeDeviceObject = SCAST<PDEVICE_OBJECT>(ExAllocatePoolWithTag(NonPagedPoolNx, BaseDeviceObject->Size, DEVICE_OBJECT_TAG));
-	if (fakeDeviceObject == NULL)
+	memcpy(fakeDriverObject, BaseDeviceObject->DriverObject, fakeDriverObjectSize);
+
+	realDeviceNameHeader = SCAST<POBJECT_HEADER_NAME_INFO>(ObQueryNameInfo(BaseDeviceObject));
+	NT_ASSERT(realDeviceNameHeader);
+
+	//
+	// Generate the object attributes for the fake device object.
+	//
+	InitializeObjectAttributes(&fakeDeviceAttributes,
+							   &realDeviceNameHeader->Name,
+							   OBJ_KERNEL_HANDLE | OBJ_PERMANENT,
+							   NULL,
+							   BaseDeviceObject->SecurityDescriptor);
+
+	//
+	// Check if the original device is exclusive.
+	//
+	if (FlagOn(BaseDeviceObject->Flags, DO_EXCLUSIVE))
 	{
-		DBGPRINT("FileObjHook!GenerateHookObjects: Could not allocate %i bytes for a fake device object.", BaseDeviceObject->Size);
-		return FALSE;
+		fakeDeviceAttributes.Attributes |= OBJ_EXCLUSIVE;
 	}
 
+	//
+	// Create the fake device object.
+	//
+	status = ObCreateObject(KernelMode, *IoDeviceObjectType, &fakeDeviceAttributes, KernelMode, NULL, sizeof(DEVICE_OBJECT) + sizeof(EXTENDED_DEVOBJ_EXTENSION), 0, 0, RCAST<PVOID*>(&FileObjHook::FakeDeviceObject));
+	if (NT_SUCCESS(status) == FALSE)
+	{
+		DBGPRINT("FileObjHook!GenerateHookObjects: Failed to create the fake device object with status 0x%X.", status);
+		goto Exit;
+	}
+
+	DBGPRINT("FileObjHook!GenerateHookObjects: Created fake device at 0x%llx.", FileObjHook::FakeDeviceObject);
 
 	//
-	// Copy the existing objects.
+	// Copy the existing object.
 	//
-	memcpy(fakeDriverObject, BaseDeviceObject->DriverObject, BaseDeviceObject->DriverObject->Size);
-	memcpy(fakeDeviceObject, BaseDeviceObject, BaseDeviceObject->Size);
+	memcpy(FileObjHook::FakeDeviceObject, BaseDeviceObject, sizeof(DEVICE_OBJECT) + sizeof(EXTENDED_DEVOBJ_EXTENSION));
 
-	//
-	// Set the fake driver object in the fake device object.
-	//
-	fakeDeviceObject->DriverObject = fakeDriverObject;
+	FileObjHook::FakeDeviceObject->DriverObject = fakeDriverObject;
+	fakeDriverObject->DeviceObject = FileObjHook::FakeDeviceObject;
 
 	//
 	// Hook the device control entry of the MajorFunction member.
@@ -352,13 +392,12 @@ FileObjHook::GenerateHookObjects (
 	}
 
 	//
-	// Set the function parameter to the new device we created.
+	// For now, redirect everything to IRP DeviceIoControl by disabling FastIo.
+	// TODO: Implement FastIo hooking.
 	//
-	if (fakeDeviceObject)
-	{
-		*NewDeviceObject = fakeDeviceObject;
-	}
-	return fakeDeviceObject != NULL && FileObjHook::OriginalDispatch != NULL;
+	FileObjHook::FakeDeviceObject->DriverObject->FastIoDispatch = NULL;
+Exit:
+	return TRUE;
 }
 
 /**
@@ -371,35 +410,31 @@ FileObjHook::HookFileObject (
 	_In_ PFILE_OBJECT FileObject
 	)
 {
-	PDEVICE_OBJECT fakeDeviceObject;
 	PDEVICE_OBJECT oldDeviceObject;
 
-	fakeDeviceObject = NULL;
-	//
-	// Generate the hook objects such as the fake driver and device object.
-	//
-	if (this->GenerateHookObjects(FileObject->DeviceObject, &fakeDeviceObject) == FALSE)
-	{
-		DBGPRINT("FileObjHook!HookFileObject: Failed to generate hook objects, aborting.");
-		return FALSE;
-	}
 	//
 	// Check if we've already hooked this FILE_OBJECT.
 	//
-	else if (FileObject->DeviceObject->DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] == this->DispatchHook)
+	if (FileObject->DeviceObject->DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] == this->DispatchHook)
 	{
 		return TRUE;
 	}
-
 	//
-	// Make sure we're not dealing with a NULL pointer.
+	// Generate the hook objects such as the fake driver and device object.
 	//
-	NT_ASSERT(fakeDeviceObject);
-
+	else if (FileObjHook::FakeDeviceObject == NULL)
+	{
+		if (this->GenerateHookObjects(FileObject->DeviceObject) == FALSE)
+		{
+			DBGPRINT("FileObjHook!HookFileObject: Failed to generate hook objects, aborting.");
+			return FALSE;
+		}
+	}
+	
 	//
 	// Atomically hook the device object of the file.
 	//
-	oldDeviceObject = reinterpret_cast<PDEVICE_OBJECT>(InterlockedExchange64(RCAST<PLONG64>(&FileObject->DeviceObject), RCAST<LONG64>(fakeDeviceObject)));
+	oldDeviceObject = reinterpret_cast<PDEVICE_OBJECT>(InterlockedExchange64(RCAST<PLONG64>(&FileObject->DeviceObject), RCAST<LONG64>(FileObjHook::FakeDeviceObject)));
 
 	//
 	// If we hit this assert, it means we're hooking a different device which should never happen.
@@ -429,7 +464,8 @@ FileObjHook::RehookThread (
 	// Sleep for HOOK_UPDATE_TIME seconds after hooking.
 	//
 	sleepInterval.QuadPart = SECONDS_TO_SYSTEMTIME(HOOK_UPDATE_TIME);
-	
+	sleepInterval.QuadPart *= -1;
+
 	//
 	// Query the device name we're gonna be hooking.
 	//
@@ -473,18 +509,17 @@ FileObjHook::DispatchHook (
 	if (irpStackLocation->MajorFunction == IRP_MJ_CLOSE)
 	{
 		//
-		// Free the fake device and driver object we created.
-		//
-		ExFreePoolWithTag(irpStackLocation->FileObject->DeviceObject->DriverObject, DRIVER_OBJECT_TAG);
-		ExFreePoolWithTag(irpStackLocation->FileObject->DeviceObject, DEVICE_OBJECT_TAG);
-
-		//
 		// Set the current device object to the original device object.
 		//
 		irpStackLocation->FileObject->DeviceObject = FileObjHook::OriginalDeviceObject;
 
 		DBGPRINT("FileObjHook!DispatchHook: Unhooked process 0x%X, file object 0x%llx, device object 0x%llx.", PsGetCurrentProcessId(), irpStackLocation->FileObject, DeviceObject);
 	}
+
+	//
+	// Make sure we don't enter a recursive loop.
+	//
+	NT_ASSERT(FileObjHook::OriginalDispatch[irpStackLocation->MajorFunction] != FileObjHook::DispatchHook);
 
 	return FileObjHook::HookFunction(FileObjHook::OriginalDispatch[irpStackLocation->MajorFunction], FileObjHook::OriginalDeviceObject, Irp);
 }

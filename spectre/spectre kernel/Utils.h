@@ -33,4 +33,8 @@ public:
 		_In_ PDRIVER_OBJECT ImpersonateDriver,
 		_In_ PVOID ThreadFunction
 		);
+
+	static CONST RTL_PROCESS_MODULE_INFORMATION GetDriverModule (
+		_In_ CONST CHAR* ModuleName
+		);
 } UTILITIES;

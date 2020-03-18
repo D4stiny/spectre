@@ -20,10 +20,19 @@ HOOK_DISPATCH (
 	_Inout_ struct _IRP* Irp
 	);
 
+typedef struct NamedDeviceObject
+{
+	CHAR ObjectNameHeaderPadding[sizeof(OBJECT_HEADER_NAME_INFO)];
+	CHAR ObjectHeaderPadding[FIELD_OFFSET(OBJECT_HEADER, Body)];
+	DEVICE_OBJECT DeviceObject;
+} NAMED_DEVICE_OBJECT, *PNAMED_DEVICE_OBJECT;
+
+#define OBJECT_NAME_OFFSET (sizeof(OBJECT_HEADER_NAME_INFO) + FIELD_OFFSET(OBJECT_HEADER, Body))
+
 //
 // Time interval before updating hooks for the FILE_OBJECT.
 //
-#define HOOK_UPDATE_TIME 10
+#define HOOK_UPDATE_TIME 2
 
 typedef HOOK_DISPATCH* PHOOK_DISPATCH;
 
@@ -44,8 +53,7 @@ typedef class FileObjHook
 		);
 
 	BOOLEAN GenerateHookObjects (
-		_In_ PDEVICE_OBJECT BaseDeviceObject,
-		_Inout_ PDEVICE_OBJECT* NewDeviceObject
+		_In_ PDEVICE_OBJECT BaseDeviceObject
 		);
 
 	static NTSTATUS DispatchHook (
@@ -65,6 +73,10 @@ typedef class FileObjHook
 	// The function to redirect IOCTLs to.
 	//
 	static PHOOK_DISPATCH HookFunction;
+	//
+	// The fake hooked device object.
+	//
+	static PDEVICE_OBJECT FakeDeviceObject;
 	//
 	// The original device object before hooking.
 	//

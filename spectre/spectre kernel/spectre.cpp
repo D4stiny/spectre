@@ -35,28 +35,35 @@ NTSTATUS HookIoctl (
 	PIO_STACK_LOCATION irpStackLocation;
 
 	irpStackLocation = IoGetCurrentIrpStackLocation(Irp);
-	switch (irpStackLocation->Parameters.DeviceIoControl.IoControlCode)
+
+	if (irpStackLocation->MajorFunction == IRP_MJ_DEVICE_CONTROL)
 	{
-	case IOCTL_AFD_BIND:
-		DBGPRINT("HookIoctl: IOCTL_AFD_BIND.");
-		break;
-	case IOCTL_AFD_CONNECT:
-		DBGPRINT("HookIoctl: IOCTL_AFD_CONNECT.");
-		break;
-	case IOCTL_AFD_ACCEPT:
-		DBGPRINT("HookIoctl: IOCTL_AFD_ACCEPT.");
-		break;
-	case IOCTL_AFD_RECV:
-		DBGPRINT("HookIoctl: IOCTL_AFD_RECV.");
-		break;
-	case IOCTL_AFD_SEND:
-		DBGPRINT("HookIoctl: IOCTL_AFD_SEND.");
-		break;
+		DBGPRINT("HookIoctl: IRP_MJ_DEVICE_CONTROL IOCTL(0x%X)", irpStackLocation->Parameters.DeviceIoControl.IoControlCode);
+		switch (irpStackLocation->Parameters.DeviceIoControl.IoControlCode)
+		{
+		case IOCTL_AFD_BIND:
+			DBGPRINT("HookIoctl: IOCTL_AFD_BIND.");
+			break;
+		case IOCTL_AFD_CONNECT:
+			DBGPRINT("HookIoctl: IOCTL_AFD_CONNECT.");
+			break;
+		case IOCTL_AFD_ACCEPT:
+			DBGPRINT("HookIoctl: IOCTL_AFD_ACCEPT.");
+			break;
+		case IOCTL_AFD_RECV:
+			DBGPRINT("HookIoctl: IOCTL_AFD_RECV.");
+			break;
+		case IOCTL_AFD_SEND:
+			DBGPRINT("HookIoctl: IOCTL_AFD_SEND.");
+			break;
+		}
+	}
+	else
+	{
+		DBGPRINT("HookIoctl: Major Function %i.", irpStackLocation->MajorFunction);
 	}
 
 	status = OriginalFunction(DeviceObject, Irp);
-
-
 
 	return status;
 }
