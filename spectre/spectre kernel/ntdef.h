@@ -445,3 +445,4 @@ typedef struct _PARTIAL_OBJECT_TYPE
 } PARTIAL_OBJECT_TYPE, *PPARTIAL_OBJECT_TYPE;
 
 #define MAX_OBJECT_TYPE_INDEX 64  // As of Windows 10 there are 64 object types.
+#define FAST_IO_DISPATCH_COUNT 26

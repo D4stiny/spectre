@@ -10,10 +10,12 @@
 // Static variables.
 //
 HOOK_TYPE FileObjHook::HookType;
-PHOOK_DISPATCH FileObjHook::HookFunction;
+PHOOK_DISPATCH FileObjHook::HookMajorFunction;
 PDRIVER_DISPATCH FileObjHook::OriginalDispatch[IRP_MJ_MAXIMUM_FUNCTION + 1];
 PDEVICE_OBJECT FileObjHook::OriginalDeviceObject;
 PDEVICE_OBJECT FileObjHook::FakeDeviceObject;
+PFAST_IO_DISPATCH FileObjHook::HookFastIoTable;
+FAST_IO_DISPATCH FileObjHook::OriginalFastIo;
 
 //
 // Represents the current hook object needed by the dispatch function.
@@ -24,19 +26,39 @@ PFILE_OBJ_HOOK CurrentObjHook;
 	Initialize the FileObjHook class.
 	@param TargetDeviceName - The name of the target device to hook.
 	@param Type - Method of hooking.
-	@param Hook - The function to redirect IRP_MJ_DEVICE_CONTROL to.
+	@param MajorFunctionHook - The function to redirect each MajorFunction to.
+	@param FastIoHook - Optional hooks for the FastIo dispatch table.
 */
 FileObjHook::FileObjHook (
 	_In_ PWCHAR TargetDeviceName,
 	_In_ HOOK_TYPE Type,
-	_In_ HOOK_DISPATCH Hook
+	_In_ HOOK_DISPATCH MajorFunctionHook,
+	_In_ PFAST_IO_DISPATCH FastIoHook
 	)
 {
 	ULONG hookCount;
 	this->HookType = Type;
-	this->HookFunction = Hook;
+	this->HookMajorFunction = MajorFunctionHook;
 	CurrentObjHook = this;
 	this->RescanThreadStarted = FALSE;
+
+	//
+	// If we're hooking FastIo, allocate a new object for it.
+	//
+	if (FastIoHook)
+	{
+		FileObjHook::HookFastIoTable = RCAST<PFAST_IO_DISPATCH>(ExAllocatePoolWithTag(NonPagedPoolNx, sizeof(FAST_IO_DISPATCH), FAST_IO_TABLE_TAG));
+		if (FileObjHook::HookFastIoTable == NULL)
+		{
+			DBGPRINT("FileObjHook!FileObjHook: Failed to allocate memory for FastIo hook table.");
+			return;
+		}
+
+		//
+		// Copy the hook table over.
+		//
+		memcpy(FileObjHook::HookFastIoTable, FastIoHook, sizeof(FAST_IO_DISPATCH));
+	}
 
 	//
 	// Do not return until we get at least 1 hook.
@@ -150,7 +172,6 @@ FileObjHook::SearchAndHook (
 	POBJECT_HEADER_NAME_INFO fileDeviceName;
 
 	UNREFERENCED_PARAMETER(HookType);
-	UNREFERENCED_PARAMETER(HookFunction);
 
 	this->ObjectsHooked = FALSE;
 	systemHandleInformation = NULL;
@@ -300,6 +321,9 @@ FileObjHook::GenerateHookObjects (
 	OBJECT_ATTRIBUTES fakeDeviceAttributes;
 	POBJECT_HEADER_NAME_INFO realDeviceNameHeader;
 
+	PVOID* originalFastIoFunctions;
+	PVOID* hookedFastIoFunctions;
+
 	ULONG i;
 
 	//
@@ -371,6 +395,9 @@ FileObjHook::GenerateHookObjects (
 	//
 	memcpy(FileObjHook::FakeDeviceObject, BaseDeviceObject, sizeof(DEVICE_OBJECT) + sizeof(EXTENDED_DEVOBJ_EXTENSION));
 
+	//
+	// Update the driver and device object attributes in the respective objects.
+	//
 	FileObjHook::FakeDeviceObject->DriverObject = fakeDriverObject;
 	fakeDriverObject->DeviceObject = FileObjHook::FakeDeviceObject;
 
@@ -381,21 +408,59 @@ FileObjHook::GenerateHookObjects (
 	{
 	case DirectHook:
 		//
-		// Place hooks and store old function.
+		// Place MajorFunction hooks and store the original function.
 		//
 		for (i = 0; i < IRP_MJ_MAXIMUM_FUNCTION + 1; i++)
 		{
 			FileObjHook::OriginalDispatch[i] = fakeDriverObject->MajorFunction[i];
 			fakeDriverObject->MajorFunction[i] = this->DispatchHook;
 		}
+
+		//
+		// Place FastIo hooks and store the original function.
+		//
+		if (fakeDriverObject->FastIoDispatch)
+		{
+			if (FileObjHook::HookFastIoTable)
+			{
+				//
+				// After the ULONG size, it's just an array of pointers.
+				//
+				originalFastIoFunctions = RCAST<PVOID*>(RCAST<ULONG64>(fakeDriverObject->FastIoDispatch) + FIELD_OFFSET(FAST_IO_DISPATCH, SizeOfFastIoDispatch));
+				hookedFastIoFunctions = RCAST<PVOID*>(RCAST<ULONG64>(FileObjHook::HookFastIoTable) + FIELD_OFFSET(FAST_IO_DISPATCH, SizeOfFastIoDispatch));
+				for (i = 0; i < FAST_IO_DISPATCH_COUNT; i++)
+				{
+					//
+					// Make sure to copy any entry in the original dispatch table that isn't hooked.
+					//
+					if (originalFastIoFunctions[i] && hookedFastIoFunctions[i] == NULL)
+					{
+						hookedFastIoFunctions[i] = originalFastIoFunctions[i];
+						DBGPRINT("FileObjHook!GenerateHookObjects: Imported unhooked FastIo dispatch entry at index %i.", i);
+					}
+				}
+
+				//
+				// Store the original table.
+				//
+				memcpy(&FileObjHook::OriginalFastIo, fakeDriverObject->FastIoDispatch, sizeof(FAST_IO_DISPATCH));
+
+				//
+				// Set the new dispatch table to point to our hook table.
+				//
+				fakeDriverObject->FastIoDispatch = FileObjHook::HookFastIoTable;
+			}
+			//
+			// If FastIo is enabled for the driver and we don't have any FastIo hooks, disable FastIo.
+			//
+			else
+			{
+				fakeDriverObject->FastIoDispatch = NULL;
+				DBGPRINT("FileObjHook!GenerateHookObjects: WARNING: Driver has FastIo, but no hooks specified! Disabling.", i);
+			}
+		}
 		break;
 	}
-
-	//
-	// For now, redirect everything to IRP DeviceIoControl by disabling FastIo.
-	// TODO: Implement FastIo hooking.
-	//
-	FileObjHook::FakeDeviceObject->DriverObject->FastIoDispatch = NULL;
 Exit:
 	return TRUE;
 }
@@ -486,7 +551,7 @@ FileObjHook::RehookThread (
 }
 
 /**
-	The base hook for all hooks. Necessary to call the HookFunction with proper arguments such as the original DEVICE_OBJECT.
+	The base hook for all hooks. Necessary to call the HookMajorFunction with proper arguments such as the original DEVICE_OBJECT.
 	@param DeviceObject - The alleged DeviceObject for the IRP_MJ_DEVICE_CONTROL call. May not be correct.
 	@param Irp - The IRP for the IRP_MJ_DEVICE_CONTROL call.
 	@return The status of the IRP_MJ_DEVICE_CONTROL call.
@@ -521,5 +586,5 @@ FileObjHook::DispatchHook (
 	//
 	NT_ASSERT(FileObjHook::OriginalDispatch[irpStackLocation->MajorFunction] != FileObjHook::DispatchHook);
 
-	return FileObjHook::HookFunction(FileObjHook::OriginalDispatch[irpStackLocation->MajorFunction], FileObjHook::OriginalDeviceObject, Irp);
+	return FileObjHook::HookMajorFunction(FileObjHook::OriginalDispatch[irpStackLocation->MajorFunction], FileObjHook::OriginalDeviceObject, Irp);
 }

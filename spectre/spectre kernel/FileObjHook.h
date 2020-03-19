@@ -72,7 +72,7 @@ typedef class FileObjHook
 	//
 	// The function to redirect IOCTLs to.
 	//
-	static PHOOK_DISPATCH HookFunction;
+	static PHOOK_DISPATCH HookMajorFunction;
 	//
 	// The fake hooked device object.
 	//
@@ -89,16 +89,25 @@ typedef class FileObjHook
 	// Whether or not the scanning thread was started.
 	//
 	BOOLEAN RescanThreadStarted;
+	//
+	// The functions to redirect FastIo operations to.
+	//
+	static PFAST_IO_DISPATCH HookFastIoTable;
 public:
 	//
 	// Whether or not there is an ongoing hook.
 	//
 	BOOLEAN ObjectsHooked;
+	//
+	// The original FastIo functions.
+	//
+	static FAST_IO_DISPATCH OriginalFastIo;
 
 	FileObjHook (
 		_In_ PWCHAR TargetDeviceName,
 		_In_ HOOK_TYPE Type,
-		_In_ HOOK_DISPATCH Hook
+		_In_ HOOK_DISPATCH MajorFunctionHook,
+		_In_ PFAST_IO_DISPATCH FastIoHook
 		);
 	~FileObjHook (
 		VOID
@@ -107,6 +116,7 @@ public:
 
 #define HANDLE_INFO_TAG 'iHpS'
 #define OBJECT_TYPE_TAG 'tOpS'
+#define FAST_IO_TABLE_TAG 'iFpS'
 #define DEVICE_OBJECT_TAG 'iveD'
 #define DRIVER_OBJECT_TAG 'virD'
 
