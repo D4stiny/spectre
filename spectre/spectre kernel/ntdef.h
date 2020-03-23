@@ -11,6 +11,7 @@
 
 typedef unsigned char BYTE;
 typedef unsigned short WORD;
+typedef unsigned int UINT;
 
 #define SystemHandleInformation 16
 
@@ -446,3 +447,15 @@ typedef struct _PARTIAL_OBJECT_TYPE
 
 #define MAX_OBJECT_TYPE_INDEX 64  // As of Windows 10 there are 64 object types.
 #define FAST_IO_DISPATCH_COUNT 26
+
+typedef struct _AFD_WSABUF {
+	UINT  len;
+	PCHAR buf;
+} AFD_WSABUF, * PAFD_WSABUF;
+
+typedef struct  _AFD_RECV_INFO {
+	PAFD_WSABUF			BufferArray;
+	ULONG				BufferCount;
+	ULONG				AfdFlags;
+	ULONG				TdiFlags;
+} AFD_RECV_INFO, * PAFD_RECV_INFO;
