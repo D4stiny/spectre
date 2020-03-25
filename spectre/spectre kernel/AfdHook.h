@@ -16,6 +16,12 @@ typedef class AfdHook
 		_In_ PDEVICE_OBJECT DeviceObject,
 		_Inout_ PIRP Irp
 		);
+	static BOOLEAN SendBuffer (
+		_In_ PFILE_OBJECT SocketFileObject,
+		_In_ PDEVICE_OBJECT OriginalDeviceObject,
+		_In_ CHAR* Buffer,
+		_In_ SIZE_T BufferSize
+		);
 	//
 	// The FileObjHook instance used to intercept communication with the Afd.sys driver.
 	//

@@ -459,3 +459,12 @@ typedef struct  _AFD_RECV_INFO {
 	ULONG				AfdFlags;
 	ULONG				TdiFlags;
 } AFD_RECV_INFO, * PAFD_RECV_INFO;
+
+typedef struct  _AFD_SEND_INFO {
+	PAFD_WSABUF			BufferArray;
+	ULONG				BufferCount;
+	ULONG				AfdFlags;
+	ULONG				TdiFlags;
+} AFD_SEND_INFO, * PAFD_SEND_INFO;
+
+#define INFINITE            0xFFFFFFFF  // Infinite timeout
