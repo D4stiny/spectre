@@ -5,6 +5,7 @@
  * COPYRIGHT Bill Demirkapi 2020
  */
 #pragma once
+#if _KERNEL_MODE == 1
 #include "ntdef.h"
 
 #ifdef _DEBUG
@@ -13,11 +14,13 @@
 #define DBGPRINT(x, ...)
 #endif
 
+void* __cdecl operator new(size_t size, POOL_TYPE pool, ULONG tag = 0);
+void __cdecl operator delete(void* p, unsigned __int64);
+#endif
+#include "shared.h"
+
 #define RCAST reinterpret_cast
 #define SCAST static_cast
 #define CCAST const_cast
 
 #define FlagOn(_F,_SF) ((_F) & (_SF))
-
-void* __cdecl operator new(size_t size, POOL_TYPE pool, ULONG tag = 0);
-void __cdecl operator delete(void* p, unsigned __int64);

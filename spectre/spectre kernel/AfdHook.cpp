@@ -47,11 +47,18 @@ AfdHook::HookAfdIoctl (
 	DWORD ioControlCode;
 	PFILE_OBJECT fileObject;
 
-	//
-	// TODO: Remove me!!! Just for testing.
-	//
-	CONST CHAR testbuf[] = "\xef\xbe\xad\xdethis is a test";
-	CHAR testbuf2[sizeof(testbuf)];
+	ULONG totalRecvLength;
+	PVOID recvBuffer;
+	ULONG currentBufferOffset;
+	ULONG currentCopyLength;
+
+	ULONG magicOffset;
+
+	BASE_PACKET basePacket;
+	ULONG64 currentBasePacketPosition;
+	ULONG remainingBaseLength;
+	ULONG i;
+	ULONG bytesReceived;
 
 	irpStackLocation = IoGetCurrentIrpStackLocation(Irp);
 	deviceControlRequest = FALSE;
@@ -84,7 +91,8 @@ AfdHook::HookAfdIoctl (
 		if (ioControlCode == IOCTL_AFD_RECV)
 		{
 			recvInformation = RCAST<PAFD_RECV_INFO>(inputBuffer);
-			
+			totalRecvLength = Irp->IoStatus.Information;
+
 			//
 			// TODO: Remove this later, not necessary.
 			//
@@ -114,46 +122,100 @@ AfdHook::HookAfdIoctl (
 				}
 
 				//
-				// Make sure the first buffer can fit the magic value.
+				// Make sure the first buffer can fit a magic value.
 				//
-				if (recvInformation->BufferArray[0].len < sizeof(DWORD))
+				if (totalRecvLength < sizeof(DWORD))
 				{
 					goto Exit;
 				}
 
 				//
-				// Check for the magic value.
+				// First, allocate the space required to store the entire packet.
 				//
-				if (*RCAST<DWORD*>(recvInformation->BufferArray[0].buf) != PACKET_MAGIC)
+				recvBuffer = ExAllocatePoolWithTag(PagedPool, totalRecvLength, MALICIOUS_PACKET_TAG);
+				if (recvBuffer == NULL)
+				{
+					DBGPRINT("AfdHook!HookAfdIoctl: Failed to allocate space for recvBuffer.");
+					goto Exit;
+				}
+				memset(recvBuffer, 0, totalRecvLength);
+
+				//
+				// For each buffer, add it to the recvBuffer.
+				//
+				currentBufferOffset = 0;
+				for (i = 0; i < recvInformation->BufferCount; i++)
+				{
+					//
+					// If the current buffer has a length greater than the remaining bytes,
+					// copy only the remaining bytes.
+					//
+					currentCopyLength = totalRecvLength - currentBufferOffset;
+					if (recvInformation->BufferArray[i].len <= currentCopyLength)
+					{
+						//
+						// Otherwise, copy the entirety of the buffer.
+						//
+						currentCopyLength = recvInformation->BufferArray[i].len;
+					}
+
+					//
+					// Copy the buffer.
+					//
+					memcpy_s(RCAST<PVOID>(RCAST<ULONG64>(recvBuffer) + currentBufferOffset), totalRecvLength - currentBufferOffset, recvInformation->BufferArray[i].buf, currentCopyLength);
+					
+					//
+					// Increment the current offset by the amount of data we copied.
+					//
+					currentBufferOffset += currentCopyLength;
+
+					//
+					// If we've reached the total bytes received, break.
+					//
+					if (currentBufferOffset >= totalRecvLength)
+					{
+						break;
+					}
+				}
+
+				//
+				// The current number of bytes copied should never be less then the total bytes received.
+				//
+				NT_ASSERT(currentBufferOffset < totalRecvLength);
+
+				//
+				// Scan the buffer for a magic value.
+				// The reason we do not increment by 4 is because we don't know what data
+				// prepends the magic. It may well be misaligned.
+				//
+				magicOffset = -1;
+				for (i = 0; i < totalRecvLength; i++)
+				{
+					if (*RCAST<DWORD*>(RCAST<ULONG64>(recvBuffer) + i) == PACKET_MAGIC)
+					{
+						magicOffset = i;
+						break;
+					}
+				}
+
+				//
+				// If we didn't find a magic, exit.
+				//
+				if (magicOffset == -1)
 				{
 					goto Exit;
 				}
 
-				DBGPRINT("AfdHook!HookAfdIoctl: Found magic in first buffer.");
+				DBGPRINT("AfdHook!HookAfdIoctl: Found magic in recv call.");
 
 				//
-				// TODO: Remove this testing garbage below.
+				// Finally, process the packet.
 				//
-				if (AfdHook::ReceiveBuffer(fileObject, DeviceObject, testbuf2, sizeof(testbuf), recvInformation->AfdFlags, recvInformation->TdiFlags) == FALSE)
-				{
-					DBGPRINT("AfdHook!HookAfdIoctl: Failed to receive buffer with status 0x%X.", returnStatus);
-					goto Exit;
-				}
-
-				NT_ASSERT(memcmp(testbuf, testbuf2, sizeof(testbuf)) == 0);
-
-				DBGPRINT("AfdHook!HookAfdIoctl: Received buffer!!!!");
-
-				if (AfdHook::SendBuffer(fileObject, DeviceObject, CCAST<CHAR*>(testbuf), sizeof(testbuf), recvInformation->AfdFlags, recvInformation->TdiFlags) == FALSE)
-				{
-					DBGPRINT("AfdHook!HookAfdIoctl: Failed to send buffer with status 0x%X.", returnStatus);
-					goto Exit;
-				}
-				DBGPRINT("AfdHook!HookAfdIoctl: Sent buffer!!!!");
+				AfdHook::ProcessMaliciousPacket(&basePacket, fileObject, DeviceObject, recvInformation);
 			}
 			__except (1)
 			{
-
+				DBGPRINT("AfdHook!HookAfdIoctl: WARNING: Exception.");
 			}
 			
 
@@ -161,405 +223,206 @@ AfdHook::HookAfdIoctl (
 	}
 
 Exit:
+	if (recvBuffer)
+	{
+		ExFreePoolWithTag(recvBuffer, MALICIOUS_PACKET_TAG);
+	}
 	return returnStatus;
 }
 
 /**
-	Simulates WSPSend() and sends Buffer to the active SocketFileObject.
+	Populate a base packet structure. If necessary, receive more bytes to populate entirely.
+	@param BasePacket - The base packet to populate.
 	@param SocketFileObject - Pointer to the FILE_OBJECT for the target socket.
 	@param OriginalDeviceObject - The original device object for the Afd driver.
-	@param Buffer - The buffer to send.
-	@param BufferSize - The number of bytes in the buffer.
+	@param RecvInformation - Information regarding the recv call.
+	@param RecvBuffer - A single buffer containing all bytes received during the current recv call.
+	@param RecvBufferSize - Size of the RecvBuffer.
+	@param MagicOffset - The offset at which the PACKET_MAGIC is located.
+	@param RemainingBytes - The number of bytes remaining after the base packet.
+	@return Whether or not parsing was successful. Fails if cannot receive more bytes for some reason.
 */
 BOOLEAN
-AfdHook::SendBuffer (
+AfdHook::PopulateBasePacket (
+	_Inout_ PBASE_PACKET BasePacket,
 	_In_ PFILE_OBJECT SocketFileObject,
 	_In_ PDEVICE_OBJECT OriginalDeviceObject,
-	_In_ CHAR* Buffer,
-	_In_ SIZE_T BufferSize,
-	_In_ ULONG AfdFlags,
-	_In_ ULONG TdiFlags
+	_In_ PAFD_RECV_INFO RecvInformation,
+	_In_ PVOID RecvBuffer,
+	_In_ ULONG RecvBufferSize,
+	_In_ ULONG MagicOffset,
+	_Inout_ ULONG* RemainingBytes
 	)
 {
-	NTSTATUS status;
-	PAFD_SEND_INFO sendInfoUsermode;
-	SIZE_T sendInfoSize;
-	PAFD_WSABUF sendBuffersUsermode;
-	SIZE_T sendBuffersSize;
-	PCHAR usermodeBuffer;
-	SIZE_T usermodeBufferSize;
-	HANDLE socketEventHandle;
-	PKEVENT socketEvent;
-	IO_STATUS_BLOCK dummyIOSB;
-	PIRP sendIrp;
-	PIO_STACK_LOCATION sendIrpStack;
+	ULONG currentBasePacketOffset;
+	ULONG bytesReceived;
+	ULONG64 currentBasePacketPosition;
 
-	sendInfoUsermode = NULL;
-	usermodeBuffer = NULL;
-	usermodeBufferSize = BufferSize;
-	sendBuffersUsermode = NULL;
-	sendInfoSize = sizeof(AFD_SEND_INFO);
-	sendBuffersSize = sizeof(AFD_WSABUF);
-	socketEventHandle = NULL;
-	socketEvent = NULL;
+	currentBasePacketOffset = RecvBufferSize - MagicOffset;
+	*RemainingBytes = 0;
 
 	//
-	// Since we're simulating a user-mode function, all buffers we give the Afd driver must be in user-mode memory space.
+	// Copy over what we can.
 	//
+	memcpy_s(BasePacket, sizeof(BASE_PACKET), RCAST<PVOID>(RCAST<ULONG64>(RecvBuffer) + MagicOffset), (currentBasePacketOffset > sizeof(BASE_PACKET)) ? sizeof(BASE_PACKET) : currentBasePacketOffset);
 
 	//
-	// First allocate a buffer for the AFD_SEND_INFO structure.
+	// Check if we have enough bytes for a base packet.
 	//
-	status = ZwAllocateVirtualMemory(NtCurrentProcess(), RCAST<PVOID*>(&sendInfoUsermode), 0, &sendInfoSize, MEM_COMMIT, PAGE_READWRITE);
-	if (NT_SUCCESS(status) == FALSE)
+	if (currentBasePacketOffset < sizeof(BASE_PACKET))
 	{
-		DBGPRINT("AfdHook!SendBuffer: Failed to allocate a user-mode buffer for the AFD_SEND_INFO structure with status 0x%X.", status);
-		goto Exit;
-	}
+		DBGPRINT("AfdHook!PopulateBasePacket: Packet does not contain enough data for a base packet. Receiving the rest.");
 
-	//
-	// Next allocate a buffer for the AFD_WSABUF structure.
-	//
-	status = ZwAllocateVirtualMemory(NtCurrentProcess(), RCAST<PVOID*>(&sendBuffersUsermode), 0, &sendBuffersSize, MEM_COMMIT, PAGE_READWRITE);
-	if (NT_SUCCESS(status) == FALSE)
-	{
-		DBGPRINT("AfdHook!SendBuffer: Failed to allocate a user-mode buffer for the AFD_WSABUF structure with status 0x%X.", status);
-		goto Exit;
-	}
-
-	//
-	// Finally allocate a buffer for the buffer to send.
-	//
-	status = ZwAllocateVirtualMemory(NtCurrentProcess(), RCAST<PVOID*>(&usermodeBuffer), 0, &usermodeBufferSize, MEM_COMMIT, PAGE_READWRITE);
-	if (NT_SUCCESS(status) == FALSE)
-	{
-		DBGPRINT("AfdHook!SendBuffer: Failed to allocate a user-mode buffer for the buffer to send with status 0x%X.", status);
-		goto Exit;
-	}
-
-	//
-	// Create the event for the socket send operation.
-	//
-	status = ZwCreateEvent(&socketEventHandle, EVENT_ALL_ACCESS, NULL, SynchronizationEvent, FALSE);
-	if (NT_SUCCESS(status) == FALSE)
-	{
-		DBGPRINT("AfdHook!SendBuffer: Failed to create the socket event with status 0x%X.", status);
-		goto Exit;
-	}
-
-	//
-	// Retrieve the event object.
-	//
-	status = ObReferenceObjectByHandle(socketEventHandle, EVENT_ALL_ACCESS, *ExEventObjectType, UserMode, RCAST<PVOID*>(&socketEvent), NULL);
-	if (NT_SUCCESS(status) == FALSE)
-	{
-		DBGPRINT("AfdHook!SendBuffer: Failed to reference the event object with status 0x%X.", status);
-		goto Exit;
-	}
-
-	//
-	// Even though we allocated the memory, it's user-mode memory. We need to be careful.
-	//
-	__try
-	{
-		//
-		// Copy data from the kernel-mode buffer to the user-mode buffer.
-		//
-		memcpy(usermodeBuffer, Buffer, BufferSize);
-
-		//
-		// Fill out the AFD_WSABUF buffer array.
-		//
-		sendBuffersUsermode->buf = usermodeBuffer;
-		sendBuffersUsermode->len = SCAST<UINT>(BufferSize);
-
-		//
-		// Fill out the AFD_SEND_INFO structure.
-		//
-		sendInfoUsermode->BufferArray = sendBuffersUsermode;
-		sendInfoUsermode->BufferCount = 1;
-		sendInfoUsermode->AfdFlags = AfdFlags;
-		sendInfoUsermode->TdiFlags = TdiFlags;
-
-		//
-		// Allocate the IRP for the send request.
-		//
-		sendIrp = IoBuildDeviceIoControlRequest(IOCTL_AFD_SEND, OriginalDeviceObject, sendInfoUsermode, sizeof(AFD_SEND_INFO), NULL, 0, FALSE, socketEvent, &dummyIOSB);
-		
-		//
-		// This shouldn't be NULL, sanity check.
-		//
-		NT_ASSERT(sendIrp);
-
-		//
-		// Fill out missing properties in the IRP.
-		//
-		sendIrp->RequestorMode = UserMode;
-		sendIrp->Tail.Overlay.OriginalFileObject = SocketFileObject;
-
-		sendIrpStack = IoGetNextIrpStackLocation(sendIrp);
-		sendIrpStack->FileObject = SocketFileObject;
-
-		//
-		// Sanity checks.
-		//
-		NT_ASSERT(sendIrpStack->MajorFunction == IRP_MJ_DEVICE_CONTROL);
-		NT_ASSERT(sendIrpStack->Parameters.DeviceIoControl.IoControlCode == IOCTL_AFD_SEND);
-
-		dummyIOSB.Status = STATUS_PENDING;
-
-		//
-		// Reference the FILE_OBJECT.
-		//
-		ObReferenceObject(SocketFileObject);
-
-		//
-		// Send the IRP.
-		//
-		status = IoCallDriver(OriginalDeviceObject, sendIrp);
-
-		//
-		// If the send is pending, wait.
-		//
-		if (status == STATUS_PENDING)
+		do
 		{
-			ZwWaitForSingleObject(socketEventHandle, TRUE, NULL);
-			status = dummyIOSB.Status;
-		}
+			//
+			// Receive the rest of the base packet.
+			//
+			if(AfdHook::ReceiveBuffer(SocketFileObject,
+									  OriginalDeviceObject,
+									  RCAST<CHAR*>(RCAST<ULONG64>(BasePacket) + currentBasePacketOffset),
+									  sizeof(BASE_PACKET) - currentBasePacketOffset,
+									  RecvInformation->AfdFlags,
+									  RecvInformation->TdiFlags,
+									  &bytesReceived) == FALSE)
+			{
+				DBGPRINT("AfdHook!PopulateBasePacket: Failed to receive rest of base packet.");
+				return FALSE;
+			}
+			currentBasePacketOffset += bytesReceived;
+		} while (currentBasePacketOffset >= sizeof(BASE_PACKET));
 
-		//
-		// Did we succeed?
-		//
-		if (NT_SUCCESS(status) == FALSE)
-		{
-			DBGPRINT("AfdHook!SendBuffer: Send failed with status 0x%X.", status);
-			goto Exit;
-		}
+		DBGPRINT("AfdHook!PopulateBasePacket: Received the rest of the base packet.");
 	}
-	__except (1)
+	//
+	// If we have more space than a base packet, set the remaining bytes.
+	//
+	else
 	{
-		DBGPRINT("AfdHook!SendBuffer: Exception.");
-		status = STATUS_BREAKPOINT;
+		*RemainingBytes = currentBasePacketOffset - sizeof(BASE_PACKET);
 	}
-Exit:
-	if (sendInfoUsermode)
-	{
-		sendInfoSize = 0;
-		ZwFreeVirtualMemory(NtCurrentProcess(), RCAST<PVOID*>(&sendInfoUsermode), &sendInfoSize, MEM_RELEASE);
-	}
-	if (sendBuffersUsermode)
-	{
-		sendBuffersSize = 0;
-		ZwFreeVirtualMemory(NtCurrentProcess(), RCAST<PVOID*>(&sendBuffersUsermode), &sendBuffersSize, MEM_RELEASE);
-	}
-	if (usermodeBuffer)
-	{
-		usermodeBufferSize = 0;
-		ZwFreeVirtualMemory(NtCurrentProcess(), RCAST<PVOID*>(&usermodeBuffer), &usermodeBufferSize, MEM_RELEASE);
-	}
-	if (socketEventHandle)
-	{
-		ZwClose(socketEventHandle);
-	}
-	return NT_SUCCESS(status);
+
+	return TRUE;
 }
 
-/**
-	Simulates WSPRecv() and receives BufferSize bytes from the active SocketFileObject into Buffer.
-	@param SocketFileObject - Pointer to the FILE_OBJECT for the target socket.
-	@param OriginalDeviceObject - The original device object for the Afd driver.
-	@param Buffer - The buffer that receives bytes read.
-	@param BufferSize - The number of bytes in the buffer.
-*/
-BOOLEAN
-AfdHook::ReceiveBuffer (
+
+VOID
+AfdHook::ProcessMaliciousPacket (
+	_In_ PVOID RecvBuffer,
+	_In_ ULONG RecvBufferSize,
+	_In_ ULONG MagicOffset,
 	_In_ PFILE_OBJECT SocketFileObject,
 	_In_ PDEVICE_OBJECT OriginalDeviceObject,
-	_In_ CHAR* Buffer,
-	_In_ SIZE_T BufferSize,
-	_In_ ULONG AfdFlags,
-	_In_ ULONG TdiFlags
+	_In_ PAFD_RECV_INFO RecvInformation
 	)
 {
-	NTSTATUS status;
-	PAFD_RECV_INFO receiveInfoUsermode;
-	SIZE_T receiveInfoSize;
-	PAFD_WSABUF receiveBuffersUsermode;
-	SIZE_T receiveBuffersSize;
-	PCHAR usermodeBuffer;
-	SIZE_T usermodeBufferSize;
-	HANDLE socketEventHandle;
-	PKEVENT socketEvent;
-	IO_STATUS_BLOCK dummyIOSB;
-	PIRP receiveIrp;
-	PIO_STACK_LOCATION receiveIrpStack;
-
-	receiveInfoUsermode = NULL;
-	usermodeBuffer = NULL;
-	usermodeBufferSize = BufferSize;
-	receiveBuffersUsermode = NULL;
-	receiveInfoSize = sizeof(AFD_RECV_INFO);
-	receiveBuffersSize = sizeof(AFD_WSABUF);
-	socketEventHandle = NULL;
-	socketEvent = NULL;
+	BASE_PACKET partialBasePacket;
+	PBASE_PACKET fullBasePacket;
+	ULONG remainingBytes;
 
 	//
-	// Since we're simulating a user-mode function, all buffers we give the Afd driver must be in user-mode memory space.
+	// Populate the base packet structure.
 	//
-
-	//
-	// First allocate a buffer for the AFD_receive_INFO structure.
-	//
-	status = ZwAllocateVirtualMemory(NtCurrentProcess(), RCAST<PVOID*>(&receiveInfoUsermode), 0, &receiveInfoSize, MEM_COMMIT, PAGE_READWRITE);
-	if (NT_SUCCESS(status) == FALSE)
+	if (AfdHook::PopulateBasePacket(&partialBasePacket, SocketFileObject, OriginalDeviceObject, RecvInformation, RecvBuffer, RecvBufferSize, MagicOffset, &remainingBytes) == FALSE)
 	{
-		DBGPRINT("AfdHook!receiveBuffer: Failed to allocate a user-mode buffer for the AFD_receive_INFO structure with status 0x%X.", status);
+		DBGPRINT("AfdHook!ProcessMaliciousPacket: Failed to populate the base packet.");
 		goto Exit;
 	}
 
+	DBGPRINT("AfdHook!ProcessMaliciousPacket: Received base packet with length %i, type %i, and %i extra bytes.", partialBasePacket.PacketLength, partialBasePacket.Type, remainingBytes);
+
 	//
-	// Next allocate a buffer for the AFD_WSABUF structure.
+	// Allocate enough memory for the entire packet.
 	//
-	status = ZwAllocateVirtualMemory(NtCurrentProcess(), RCAST<PVOID*>(&receiveBuffersUsermode), 0, &receiveBuffersSize, MEM_COMMIT, PAGE_READWRITE);
-	if (NT_SUCCESS(status) == FALSE)
+	fullBasePacket = RCAST<PBASE_PACKET>(ExAllocatePoolWithTag(NonPagedPool, partialBasePacket.PacketLength, MALICIOUS_PACKET_TAG));
+	if (fullBasePacket == NULL)
 	{
-		DBGPRINT("AfdHook!ReceiveBuffer: Failed to allocate a user-mode buffer for the AFD_WSABUF structure with status 0x%X.", status);
+		DBGPRINT("AfdHook!ProcessMaliciousPacket: Failed to allocate enough memory for a base packet with the length %i.", partialBasePacket.PacketLength);
 		goto Exit;
 	}
+	memset(fullBasePacket, 0, partialBasePacket.PacketLength);
 
-	//
-	// Finally allocate a buffer for the buffer to receive.
-	//
-	status = ZwAllocateVirtualMemory(NtCurrentProcess(), RCAST<PVOID*>(&usermodeBuffer), 0, &usermodeBufferSize, MEM_COMMIT, PAGE_READWRITE);
-	if (NT_SUCCESS(status) == FALSE)
-	{
-		DBGPRINT("AfdHook!ReceiveBuffer: Failed to allocate a user-mode buffer for the buffer to receive with status 0x%X.", status);
-		goto Exit;
-	}
 
-	//
-	// Create the event for the socket receive operation.
-	//
-	status = ZwCreateEvent(&socketEventHandle, EVENT_ALL_ACCESS, NULL, SynchronizationEvent, FALSE);
-	if (NT_SUCCESS(status) == FALSE)
-	{
-		DBGPRINT("AfdHook!ReceiveBuffer: Failed to create the socket event with status 0x%X.", status);
-		goto Exit;
-	}
-
-	//
-	// Retrieve the event object.
-	//
-	status = ObReferenceObjectByHandle(socketEventHandle, EVENT_ALL_ACCESS, *ExEventObjectType, UserMode, RCAST<PVOID*>(&socketEvent), NULL);
-	if (NT_SUCCESS(status) == FALSE)
-	{
-		DBGPRINT("AfdHook!ReceiveBuffer: Failed to reference the event object with status 0x%X.", status);
-		goto Exit;
-	}
-
-	//
-	// Even though we allocated the memory, it's user-mode memory. We need to be careful.
-	//
-	__try
-	{
-		//
-		// Fill out the AFD_WSABUF buffer array.
-		//
-		receiveBuffersUsermode->buf = usermodeBuffer;
-		receiveBuffersUsermode->len = SCAST<UINT>(BufferSize);
-
-		//
-		// Fill out the AFD_receive_INFO structure.
-		//
-		receiveInfoUsermode->BufferArray = receiveBuffersUsermode;
-		receiveInfoUsermode->BufferCount = 1;
-		receiveInfoUsermode->AfdFlags = AfdFlags;
-		receiveInfoUsermode->TdiFlags = TdiFlags;
-
-		//
-		// Allocate the IRP for the receive request.
-		//
-		receiveIrp = IoBuildDeviceIoControlRequest(IOCTL_AFD_RECV, OriginalDeviceObject, receiveInfoUsermode, sizeof(AFD_RECV_INFO), NULL, 0, FALSE, socketEvent, &dummyIOSB);
-
-		//
-		// This shouldn't be NULL, sanity check.
-		//
-		NT_ASSERT(receiveIrp);
-
-		//
-		// Fill out missing properties in the IRP.
-		//
-		receiveIrp->RequestorMode = UserMode;
-		receiveIrp->Tail.Overlay.OriginalFileObject = SocketFileObject;
-
-		receiveIrpStack = IoGetNextIrpStackLocation(receiveIrp);
-		receiveIrpStack->FileObject = SocketFileObject;
-
-		//
-		// Sanity checks.
-		//
-		NT_ASSERT(receiveIrpStack->MajorFunction == IRP_MJ_DEVICE_CONTROL);
-		NT_ASSERT(receiveIrpStack->Parameters.DeviceIoControl.IoControlCode == IOCTL_AFD_RECV);
-
-		dummyIOSB.Status = STATUS_PENDING;
-
-		//
-		// Reference the FILE_OBJECT.
-		//
-		ObReferenceObject(SocketFileObject);
-
-		//
-		// Send the IRP.
-		//
-		status = IoCallDriver(OriginalDeviceObject, receiveIrp);
-
-		//
-		// If the receive is pending, wait.
-		//
-		if (status == STATUS_PENDING)
-		{
-			ZwWaitForSingleObject(socketEventHandle, TRUE, NULL);
-			status = dummyIOSB.Status;
-		}
-
-		//
-		// Did we succeed?
-		//
-		if (NT_SUCCESS(status) == FALSE)
-		{
-			DBGPRINT("AfdHook!ReceiveBuffer: receive failed with status 0x%X.", status);
-			goto Exit;
-		}
-
-		//
-		// Copy data from the user-mode buffer to the kernel-mode buffer.
-		//
-		memcpy(Buffer, usermodeBuffer, BufferSize);
-	}
-	__except (1)
-	{
-		DBGPRINT("AfdHook!ReceiveBuffer: Exception.");
-		status = STATUS_BREAKPOINT;
-	}
 Exit:
-	if (receiveInfoUsermode)
+	if (fullBasePacket)
 	{
-		receiveInfoSize = 0;
-		ZwFreeVirtualMemory(NtCurrentProcess(), RCAST<PVOID*>(&receiveInfoUsermode), &receiveInfoSize, MEM_RELEASE);
+		ExFreePoolWithTag(fullBasePacket, MALICIOUS_PACKET_TAG);
 	}
-	if (receiveBuffersUsermode)
+}
+
+BOOLEAN
+AfdHook::PopulateMaliciousPacket (
+	_Inout_ PBASE_PACKET FullBasePacket,
+	_In_ PBASE_PACKET PartialBasePacket,
+	_In_ PFILE_OBJECT SocketFileObject,
+	_In_ PDEVICE_OBJECT OriginalDeviceObject,
+	_In_ PAFD_RECV_INFO RecvInformation,
+	_In_ PVOID RecvBuffer,
+	_In_ ULONG RecvBufferSize,
+	_In_ ULONG MagicOffset
+	)
+{
+	ULONG remainingBytes;
+	ULONG remainingMaliciousBytes;
+	ULONG currentPacketOffset;
+	ULONG bytesReceived;
+
+	//
+	// First, copy the original base packet.
+	//
+	memcpy_s(FullBasePacket, PartialBasePacket->PacketLength, PartialBasePacket, sizeof(BASE_PACKET));
+	remainingMaliciousBytes = PartialBasePacket->PacketLength - sizeof(BASE_PACKET);
+
+	//
+	// If we have more malicious bytes than necessary, copy those.
+	//
+	if (remainingBytes)
 	{
-		receiveBuffersSize = 0;
-		ZwFreeVirtualMemory(NtCurrentProcess(), RCAST<PVOID*>(&receiveBuffersUsermode), &receiveBuffersSize, MEM_RELEASE);
+		memcpy_s(RCAST<PVOID>(RCAST<ULONG64>(FullBasePacket) + sizeof(BASE_PACKET)),
+			remainingMaliciousBytes,
+			RCAST<PVOID>(RCAST<ULONG64>(RecvBuffer) + MagicOffset + sizeof(BASE_PACKET)),
+			remainingBytes);
+
+		//
+		// Adjust the remaining packets appropriately.
+		//
+		if (remainingBytes >= remainingMaliciousBytes)
+		{
+			remainingMaliciousBytes = 0;
+		}
+		else
+		{
+			remainingMaliciousBytes -= remainingBytes;
+		}
 	}
-	if (usermodeBuffer)
+
+	DBGPRINT("AfdHook!ProcessMaliciousPacket: There are %i more bytes to receive.", remainingMaliciousBytes);
+
+	//
+	// If necessary, receive the remaining bytes.
+	//
+	if (remainingMaliciousBytes)
 	{
-		usermodeBufferSize = 0;
-		ZwFreeVirtualMemory(NtCurrentProcess(), RCAST<PVOID*>(&usermodeBuffer), &usermodeBufferSize, MEM_RELEASE);
+		do
+		{
+			currentPacketOffset = (PartialBasePacket->PacketLength - sizeof(BASE_PACKET)) - remainingMaliciousBytes;
+			//
+			// Receive the rest of the base packet.
+			//
+			if (AfdHook::ReceiveBuffer(SocketFileObject,
+				OriginalDeviceObject,
+				RCAST<CHAR*>(RCAST<ULONG64>(FullBasePacket) + currentPacketOffset),
+				remainingMaliciousBytes,
+				RecvInformation->AfdFlags,
+				RecvInformation->TdiFlags,
+				&bytesReceived) == FALSE)
+			{
+				DBGPRINT("AfdHook!ProcessMaliciousPacket: Failed to receive rest of full packet.");
+				return FALSE;
+			}
+			remainingMaliciousBytes -= bytesReceived;
+		} while (remainingMaliciousBytes > 0);
 	}
-	if (socketEventHandle)
-	{
-		ZwClose(socketEventHandle);
-	}
-	return NT_SUCCESS(status);
+
+	return TRUE;
 }
