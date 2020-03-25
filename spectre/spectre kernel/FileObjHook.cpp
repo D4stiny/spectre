@@ -528,7 +528,7 @@ FileObjHook::RehookThread (
 	//
 	// Sleep for HOOK_UPDATE_TIME seconds after hooking.
 	//
-	sleepInterval.QuadPart = SECONDS_TO_SYSTEMTIME(HOOK_UPDATE_TIME);
+	sleepInterval.QuadPart = MILLISECONDS_TO_SYSTEMTIME(HOOK_UPDATE_TIME);
 	sleepInterval.QuadPart *= -1;
 
 	//

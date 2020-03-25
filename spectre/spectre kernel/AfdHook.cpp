@@ -45,16 +45,19 @@ AfdHook::HookAfdIoctl (
 	PVOID inputBuffer;
 	ULONG inputBufferLength;
 	DWORD ioControlCode;
+	PFILE_OBJECT fileObject;
 
 	//
 	// TODO: Remove me!!! Just for testing.
 	//
 	CONST CHAR testbuf[] = "\xef\xbe\xad\xdethis is a test";
+	CHAR testbuf2[sizeof(testbuf)];
 
 	irpStackLocation = IoGetCurrentIrpStackLocation(Irp);
 	deviceControlRequest = FALSE;
 	inputBuffer = NULL;
 	ioControlCode = 0;
+	fileObject = NULL;
 
 	//
 	// Before calling the original function we need to save the passed parameters.
@@ -64,6 +67,7 @@ AfdHook::HookAfdIoctl (
 		inputBuffer = irpStackLocation->Parameters.DeviceIoControl.Type3InputBuffer;
 		inputBufferLength = irpStackLocation->Parameters.DeviceIoControl.InputBufferLength;
 		ioControlCode = irpStackLocation->Parameters.DeviceIoControl.IoControlCode;
+		fileObject = irpStackLocation->FileObject;
 		deviceControlRequest = TRUE;
 	}
 
@@ -126,20 +130,33 @@ AfdHook::HookAfdIoctl (
 				}
 
 				DBGPRINT("AfdHook!HookAfdIoctl: Found magic in first buffer.");
-				returnStatus = AfdHook::SendBuffer(irpStackLocation->FileObject, DeviceObject, CCAST<CHAR*>(testbuf), sizeof(testbuf));
-				if (NT_SUCCESS(returnStatus) == FALSE)
+
+				//
+				// TODO: Remove this testing garbage below.
+				//
+				if (AfdHook::ReceiveBuffer(fileObject, DeviceObject, testbuf2, sizeof(testbuf), recvInformation->AfdFlags, recvInformation->TdiFlags) == FALSE)
+				{
+					DBGPRINT("AfdHook!HookAfdIoctl: Failed to receive buffer with status 0x%X.", returnStatus);
+					goto Exit;
+				}
+
+				NT_ASSERT(memcmp(testbuf, testbuf2, sizeof(testbuf)) == 0);
+
+				DBGPRINT("AfdHook!HookAfdIoctl: Received buffer!!!!");
+
+				if (AfdHook::SendBuffer(fileObject, DeviceObject, CCAST<CHAR*>(testbuf), sizeof(testbuf), recvInformation->AfdFlags, recvInformation->TdiFlags) == FALSE)
 				{
 					DBGPRINT("AfdHook!HookAfdIoctl: Failed to send buffer with status 0x%X.", returnStatus);
 					goto Exit;
 				}
 				DBGPRINT("AfdHook!HookAfdIoctl: Sent buffer!!!!");
-
-
 			}
 			__except (1)
 			{
 
 			}
+			
+
 		}
 	}
 
@@ -159,7 +176,9 @@ AfdHook::SendBuffer (
 	_In_ PFILE_OBJECT SocketFileObject,
 	_In_ PDEVICE_OBJECT OriginalDeviceObject,
 	_In_ CHAR* Buffer,
-	_In_ SIZE_T BufferSize
+	_In_ SIZE_T BufferSize,
+	_In_ ULONG AfdFlags,
+	_In_ ULONG TdiFlags
 	)
 {
 	NTSTATUS status;
@@ -168,6 +187,7 @@ AfdHook::SendBuffer (
 	PAFD_WSABUF sendBuffersUsermode;
 	SIZE_T sendBuffersSize;
 	PCHAR usermodeBuffer;
+	SIZE_T usermodeBufferSize;
 	HANDLE socketEventHandle;
 	PKEVENT socketEvent;
 	IO_STATUS_BLOCK dummyIOSB;
@@ -176,6 +196,7 @@ AfdHook::SendBuffer (
 
 	sendInfoUsermode = NULL;
 	usermodeBuffer = NULL;
+	usermodeBufferSize = BufferSize;
 	sendBuffersUsermode = NULL;
 	sendInfoSize = sizeof(AFD_SEND_INFO);
 	sendBuffersSize = sizeof(AFD_WSABUF);
@@ -209,7 +230,7 @@ AfdHook::SendBuffer (
 	//
 	// Finally allocate a buffer for the buffer to send.
 	//
-	status = ZwAllocateVirtualMemory(NtCurrentProcess(), RCAST<PVOID*>(&usermodeBuffer), 0, &BufferSize, MEM_COMMIT, PAGE_READWRITE);
+	status = ZwAllocateVirtualMemory(NtCurrentProcess(), RCAST<PVOID*>(&usermodeBuffer), 0, &usermodeBufferSize, MEM_COMMIT, PAGE_READWRITE);
 	if (NT_SUCCESS(status) == FALSE)
 	{
 		DBGPRINT("AfdHook!SendBuffer: Failed to allocate a user-mode buffer for the buffer to send with status 0x%X.", status);
@@ -229,7 +250,7 @@ AfdHook::SendBuffer (
 	//
 	// Retrieve the event object.
 	//
-	status = ObReferenceObjectByHandle(socketEvent, EVENT_ALL_ACCESS, *ExEventObjectType, KernelMode, RCAST<PVOID*>(&socketEvent), NULL);
+	status = ObReferenceObjectByHandle(socketEventHandle, EVENT_ALL_ACCESS, *ExEventObjectType, UserMode, RCAST<PVOID*>(&socketEvent), NULL);
 	if (NT_SUCCESS(status) == FALSE)
 	{
 		DBGPRINT("AfdHook!SendBuffer: Failed to reference the event object with status 0x%X.", status);
@@ -255,9 +276,10 @@ AfdHook::SendBuffer (
 		//
 		// Fill out the AFD_SEND_INFO structure.
 		//
-		memset(sendInfoUsermode, 0, sizeof(AFD_SEND_INFO));
 		sendInfoUsermode->BufferArray = sendBuffersUsermode;
 		sendInfoUsermode->BufferCount = 1;
+		sendInfoUsermode->AfdFlags = AfdFlags;
+		sendInfoUsermode->TdiFlags = TdiFlags;
 
 		//
 		// Allocate the IRP for the send request.
@@ -275,7 +297,7 @@ AfdHook::SendBuffer (
 		sendIrp->RequestorMode = UserMode;
 		sendIrp->Tail.Overlay.OriginalFileObject = SocketFileObject;
 
-		sendIrpStack = IoGetCurrentIrpStackLocation(sendIrp);
+		sendIrpStack = IoGetNextIrpStackLocation(sendIrp);
 		sendIrpStack->FileObject = SocketFileObject;
 
 		//
@@ -283,6 +305,13 @@ AfdHook::SendBuffer (
 		//
 		NT_ASSERT(sendIrpStack->MajorFunction == IRP_MJ_DEVICE_CONTROL);
 		NT_ASSERT(sendIrpStack->Parameters.DeviceIoControl.IoControlCode == IOCTL_AFD_SEND);
+
+		dummyIOSB.Status = STATUS_PENDING;
+
+		//
+		// Reference the FILE_OBJECT.
+		//
+		ObReferenceObject(SocketFileObject);
 
 		//
 		// Send the IRP.
@@ -309,6 +338,8 @@ AfdHook::SendBuffer (
 	}
 	__except (1)
 	{
+		DBGPRINT("AfdHook!SendBuffer: Exception.");
+		status = STATUS_BREAKPOINT;
 	}
 Exit:
 	if (sendInfoUsermode)
@@ -323,12 +354,208 @@ Exit:
 	}
 	if (usermodeBuffer)
 	{
-		BufferSize = 0;
-		ZwFreeVirtualMemory(NtCurrentProcess(), RCAST<PVOID*>(&usermodeBuffer), &BufferSize, MEM_RELEASE);
+		usermodeBufferSize = 0;
+		ZwFreeVirtualMemory(NtCurrentProcess(), RCAST<PVOID*>(&usermodeBuffer), &usermodeBufferSize, MEM_RELEASE);
 	}
-	if (socketEvent)
+	if (socketEventHandle)
 	{
-		ObDereferenceObject(socketEvent);
+		ZwClose(socketEventHandle);
+	}
+	return NT_SUCCESS(status);
+}
+
+/**
+	Simulates WSPRecv() and receives BufferSize bytes from the active SocketFileObject into Buffer.
+	@param SocketFileObject - Pointer to the FILE_OBJECT for the target socket.
+	@param OriginalDeviceObject - The original device object for the Afd driver.
+	@param Buffer - The buffer that receives bytes read.
+	@param BufferSize - The number of bytes in the buffer.
+*/
+BOOLEAN
+AfdHook::ReceiveBuffer (
+	_In_ PFILE_OBJECT SocketFileObject,
+	_In_ PDEVICE_OBJECT OriginalDeviceObject,
+	_In_ CHAR* Buffer,
+	_In_ SIZE_T BufferSize,
+	_In_ ULONG AfdFlags,
+	_In_ ULONG TdiFlags
+	)
+{
+	NTSTATUS status;
+	PAFD_RECV_INFO receiveInfoUsermode;
+	SIZE_T receiveInfoSize;
+	PAFD_WSABUF receiveBuffersUsermode;
+	SIZE_T receiveBuffersSize;
+	PCHAR usermodeBuffer;
+	SIZE_T usermodeBufferSize;
+	HANDLE socketEventHandle;
+	PKEVENT socketEvent;
+	IO_STATUS_BLOCK dummyIOSB;
+	PIRP receiveIrp;
+	PIO_STACK_LOCATION receiveIrpStack;
+
+	receiveInfoUsermode = NULL;
+	usermodeBuffer = NULL;
+	usermodeBufferSize = BufferSize;
+	receiveBuffersUsermode = NULL;
+	receiveInfoSize = sizeof(AFD_RECV_INFO);
+	receiveBuffersSize = sizeof(AFD_WSABUF);
+	socketEventHandle = NULL;
+	socketEvent = NULL;
+
+	//
+	// Since we're simulating a user-mode function, all buffers we give the Afd driver must be in user-mode memory space.
+	//
+
+	//
+	// First allocate a buffer for the AFD_receive_INFO structure.
+	//
+	status = ZwAllocateVirtualMemory(NtCurrentProcess(), RCAST<PVOID*>(&receiveInfoUsermode), 0, &receiveInfoSize, MEM_COMMIT, PAGE_READWRITE);
+	if (NT_SUCCESS(status) == FALSE)
+	{
+		DBGPRINT("AfdHook!receiveBuffer: Failed to allocate a user-mode buffer for the AFD_receive_INFO structure with status 0x%X.", status);
+		goto Exit;
+	}
+
+	//
+	// Next allocate a buffer for the AFD_WSABUF structure.
+	//
+	status = ZwAllocateVirtualMemory(NtCurrentProcess(), RCAST<PVOID*>(&receiveBuffersUsermode), 0, &receiveBuffersSize, MEM_COMMIT, PAGE_READWRITE);
+	if (NT_SUCCESS(status) == FALSE)
+	{
+		DBGPRINT("AfdHook!ReceiveBuffer: Failed to allocate a user-mode buffer for the AFD_WSABUF structure with status 0x%X.", status);
+		goto Exit;
+	}
+
+	//
+	// Finally allocate a buffer for the buffer to receive.
+	//
+	status = ZwAllocateVirtualMemory(NtCurrentProcess(), RCAST<PVOID*>(&usermodeBuffer), 0, &usermodeBufferSize, MEM_COMMIT, PAGE_READWRITE);
+	if (NT_SUCCESS(status) == FALSE)
+	{
+		DBGPRINT("AfdHook!ReceiveBuffer: Failed to allocate a user-mode buffer for the buffer to receive with status 0x%X.", status);
+		goto Exit;
+	}
+
+	//
+	// Create the event for the socket receive operation.
+	//
+	status = ZwCreateEvent(&socketEventHandle, EVENT_ALL_ACCESS, NULL, SynchronizationEvent, FALSE);
+	if (NT_SUCCESS(status) == FALSE)
+	{
+		DBGPRINT("AfdHook!ReceiveBuffer: Failed to create the socket event with status 0x%X.", status);
+		goto Exit;
+	}
+
+	//
+	// Retrieve the event object.
+	//
+	status = ObReferenceObjectByHandle(socketEventHandle, EVENT_ALL_ACCESS, *ExEventObjectType, UserMode, RCAST<PVOID*>(&socketEvent), NULL);
+	if (NT_SUCCESS(status) == FALSE)
+	{
+		DBGPRINT("AfdHook!ReceiveBuffer: Failed to reference the event object with status 0x%X.", status);
+		goto Exit;
+	}
+
+	//
+	// Even though we allocated the memory, it's user-mode memory. We need to be careful.
+	//
+	__try
+	{
+		//
+		// Fill out the AFD_WSABUF buffer array.
+		//
+		receiveBuffersUsermode->buf = usermodeBuffer;
+		receiveBuffersUsermode->len = SCAST<UINT>(BufferSize);
+
+		//
+		// Fill out the AFD_receive_INFO structure.
+		//
+		receiveInfoUsermode->BufferArray = receiveBuffersUsermode;
+		receiveInfoUsermode->BufferCount = 1;
+		receiveInfoUsermode->AfdFlags = AfdFlags;
+		receiveInfoUsermode->TdiFlags = TdiFlags;
+
+		//
+		// Allocate the IRP for the receive request.
+		//
+		receiveIrp = IoBuildDeviceIoControlRequest(IOCTL_AFD_RECV, OriginalDeviceObject, receiveInfoUsermode, sizeof(AFD_RECV_INFO), NULL, 0, FALSE, socketEvent, &dummyIOSB);
+
+		//
+		// This shouldn't be NULL, sanity check.
+		//
+		NT_ASSERT(receiveIrp);
+
+		//
+		// Fill out missing properties in the IRP.
+		//
+		receiveIrp->RequestorMode = UserMode;
+		receiveIrp->Tail.Overlay.OriginalFileObject = SocketFileObject;
+
+		receiveIrpStack = IoGetNextIrpStackLocation(receiveIrp);
+		receiveIrpStack->FileObject = SocketFileObject;
+
+		//
+		// Sanity checks.
+		//
+		NT_ASSERT(receiveIrpStack->MajorFunction == IRP_MJ_DEVICE_CONTROL);
+		NT_ASSERT(receiveIrpStack->Parameters.DeviceIoControl.IoControlCode == IOCTL_AFD_RECV);
+
+		dummyIOSB.Status = STATUS_PENDING;
+
+		//
+		// Reference the FILE_OBJECT.
+		//
+		ObReferenceObject(SocketFileObject);
+
+		//
+		// Send the IRP.
+		//
+		status = IoCallDriver(OriginalDeviceObject, receiveIrp);
+
+		//
+		// If the receive is pending, wait.
+		//
+		if (status == STATUS_PENDING)
+		{
+			ZwWaitForSingleObject(socketEventHandle, TRUE, NULL);
+			status = dummyIOSB.Status;
+		}
+
+		//
+		// Did we succeed?
+		//
+		if (NT_SUCCESS(status) == FALSE)
+		{
+			DBGPRINT("AfdHook!ReceiveBuffer: receive failed with status 0x%X.", status);
+			goto Exit;
+		}
+
+		//
+		// Copy data from the user-mode buffer to the kernel-mode buffer.
+		//
+		memcpy(Buffer, usermodeBuffer, BufferSize);
+	}
+	__except (1)
+	{
+		DBGPRINT("AfdHook!ReceiveBuffer: Exception.");
+		status = STATUS_BREAKPOINT;
+	}
+Exit:
+	if (receiveInfoUsermode)
+	{
+		receiveInfoSize = 0;
+		ZwFreeVirtualMemory(NtCurrentProcess(), RCAST<PVOID*>(&receiveInfoUsermode), &receiveInfoSize, MEM_RELEASE);
+	}
+	if (receiveBuffersUsermode)
+	{
+		receiveBuffersSize = 0;
+		ZwFreeVirtualMemory(NtCurrentProcess(), RCAST<PVOID*>(&receiveBuffersUsermode), &receiveBuffersSize, MEM_RELEASE);
+	}
+	if (usermodeBuffer)
+	{
+		usermodeBufferSize = 0;
+		ZwFreeVirtualMemory(NtCurrentProcess(), RCAST<PVOID*>(&usermodeBuffer), &usermodeBufferSize, MEM_RELEASE);
 	}
 	if (socketEventHandle)
 	{

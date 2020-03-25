@@ -30,9 +30,9 @@ typedef struct NamedDeviceObject
 #define OBJECT_NAME_OFFSET (sizeof(OBJECT_HEADER_NAME_INFO) + FIELD_OFFSET(OBJECT_HEADER, Body))
 
 //
-// Time interval before updating hooks for the FILE_OBJECT.
+// Time interval (seconds) before updating hooks for the FILE_OBJECT.
 //
-#define HOOK_UPDATE_TIME 2
+#define HOOK_UPDATE_TIME 500
 
 typedef HOOK_DISPATCH* PHOOK_DISPATCH;
 
@@ -120,7 +120,7 @@ public:
 #define DEVICE_OBJECT_TAG 'iveD'
 #define DRIVER_OBJECT_TAG 'virD'
 
-#define SYSTEMTIME_TO_SECONDS(systemtime) systemtime.QuadPart / 10000000
-#define SECONDS_TO_SYSTEMTIME(seconds) seconds * 10000000
+#define SYSTEMTIME_TO_MILLISECONDS(systemtime) systemtime.QuadPart / 10000
+#define MILLISECONDS_TO_SYSTEMTIME(milliseconds) milliseconds * 10000
 
 extern PFILE_OBJ_HOOK CurrentObjHook;
