@@ -123,6 +123,7 @@
     <ClCompile Include="AfdHook.cpp" />
     <ClCompile Include="common.cpp" />
     <ClCompile Include="FileObjHook.cpp" />
+    <ClCompile Include="PacketHandler.cpp" />
     <ClCompile Include="spectre.cpp" />
     <ClCompile Include="Utils.cpp" />
   </ItemGroup>

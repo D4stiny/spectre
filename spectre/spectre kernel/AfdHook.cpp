@@ -52,19 +52,21 @@ AfdHook::HookAfdIoctl (
 	ULONG currentBufferOffset;
 	ULONG currentCopyLength;
 
+	BOOLEAN foundMagic;
 	ULONG magicOffset;
 
-	BASE_PACKET basePacket;
-	ULONG64 currentBasePacketPosition;
-	ULONG remainingBaseLength;
 	ULONG i;
-	ULONG bytesReceived;
+
+	PPACKET_HANDLER packetHandler;
 
 	irpStackLocation = IoGetCurrentIrpStackLocation(Irp);
 	deviceControlRequest = FALSE;
 	inputBuffer = NULL;
 	ioControlCode = 0;
 	fileObject = NULL;
+	foundMagic = FALSE;
+	recvBuffer = NULL;
+	magicOffset = 0;
 
 	//
 	// Before calling the original function we need to save the passed parameters.
@@ -91,7 +93,7 @@ AfdHook::HookAfdIoctl (
 		if (ioControlCode == IOCTL_AFD_RECV)
 		{
 			recvInformation = RCAST<PAFD_RECV_INFO>(inputBuffer);
-			totalRecvLength = Irp->IoStatus.Information;
+			totalRecvLength = SCAST<ULONG>(Irp->IoStatus.Information);
 
 			//
 			// TODO: Remove this later, not necessary.
@@ -179,21 +181,16 @@ AfdHook::HookAfdIoctl (
 				}
 
 				//
-				// The current number of bytes copied should never be less then the total bytes received.
-				//
-				NT_ASSERT(currentBufferOffset < totalRecvLength);
-
-				//
 				// Scan the buffer for a magic value.
 				// The reason we do not increment by 4 is because we don't know what data
 				// prepends the magic. It may well be misaligned.
 				//
-				magicOffset = -1;
 				for (i = 0; i < totalRecvLength; i++)
 				{
 					if (*RCAST<DWORD*>(RCAST<ULONG64>(recvBuffer) + i) == PACKET_MAGIC)
 					{
 						magicOffset = i;
+						foundMagic = TRUE;
 						break;
 					}
 				}
@@ -201,7 +198,7 @@ AfdHook::HookAfdIoctl (
 				//
 				// If we didn't find a magic, exit.
 				//
-				if (magicOffset == -1)
+				if (foundMagic == FALSE)
 				{
 					goto Exit;
 				}
@@ -209,9 +206,22 @@ AfdHook::HookAfdIoctl (
 				DBGPRINT("AfdHook!HookAfdIoctl: Found magic in recv call.");
 
 				//
-				// Finally, process the packet.
+				// Allocate the packet handler.
 				//
-				AfdHook::ProcessMaliciousPacket(&basePacket, fileObject, DeviceObject, recvInformation);
+				packetHandler = new (NonPagedPool, AFD_PACKET_HANDLER_TAG) PacketHandler(fileObject,
+																						 DeviceObject,
+																						 recvInformation,
+																						 recvBuffer,
+																						 totalRecvLength,
+																						 magicOffset);
+				if (packetHandler->Process() == FALSE)
+				{
+					DBGPRINT("AfdHook!HookAfdIoctl: Failed to process the packet.");
+				}
+				else
+				{
+					DBGPRINT("AfdHook!HookAfdIoctl: Processed the packet successfully.");
+				}
 			}
 			__except (1)
 			{
@@ -221,208 +231,10 @@ AfdHook::HookAfdIoctl (
 
 		}
 	}
-
 Exit:
 	if (recvBuffer)
 	{
 		ExFreePoolWithTag(recvBuffer, MALICIOUS_PACKET_TAG);
 	}
 	return returnStatus;
-}
-
-/**
-	Populate a base packet structure. If necessary, receive more bytes to populate entirely.
-	@param BasePacket - The base packet to populate.
-	@param SocketFileObject - Pointer to the FILE_OBJECT for the target socket.
-	@param OriginalDeviceObject - The original device object for the Afd driver.
-	@param RecvInformation - Information regarding the recv call.
-	@param RecvBuffer - A single buffer containing all bytes received during the current recv call.
-	@param RecvBufferSize - Size of the RecvBuffer.
-	@param MagicOffset - The offset at which the PACKET_MAGIC is located.
-	@param RemainingBytes - The number of bytes remaining after the base packet.
-	@return Whether or not parsing was successful. Fails if cannot receive more bytes for some reason.
-*/
-BOOLEAN
-AfdHook::PopulateBasePacket (
-	_Inout_ PBASE_PACKET BasePacket,
-	_In_ PFILE_OBJECT SocketFileObject,
-	_In_ PDEVICE_OBJECT OriginalDeviceObject,
-	_In_ PAFD_RECV_INFO RecvInformation,
-	_In_ PVOID RecvBuffer,
-	_In_ ULONG RecvBufferSize,
-	_In_ ULONG MagicOffset,
-	_Inout_ ULONG* RemainingBytes
-	)
-{
-	ULONG currentBasePacketOffset;
-	ULONG bytesReceived;
-	ULONG64 currentBasePacketPosition;
-
-	currentBasePacketOffset = RecvBufferSize - MagicOffset;
-	*RemainingBytes = 0;
-
-	//
-	// Copy over what we can.
-	//
-	memcpy_s(BasePacket, sizeof(BASE_PACKET), RCAST<PVOID>(RCAST<ULONG64>(RecvBuffer) + MagicOffset), (currentBasePacketOffset > sizeof(BASE_PACKET)) ? sizeof(BASE_PACKET) : currentBasePacketOffset);
-
-	//
-	// Check if we have enough bytes for a base packet.
-	//
-	if (currentBasePacketOffset < sizeof(BASE_PACKET))
-	{
-		DBGPRINT("AfdHook!PopulateBasePacket: Packet does not contain enough data for a base packet. Receiving the rest.");
-
-		do
-		{
-			//
-			// Receive the rest of the base packet.
-			//
-			if(AfdHook::ReceiveBuffer(SocketFileObject,
-									  OriginalDeviceObject,
-									  RCAST<CHAR*>(RCAST<ULONG64>(BasePacket) + currentBasePacketOffset),
-									  sizeof(BASE_PACKET) - currentBasePacketOffset,
-									  RecvInformation->AfdFlags,
-									  RecvInformation->TdiFlags,
-									  &bytesReceived) == FALSE)
-			{
-				DBGPRINT("AfdHook!PopulateBasePacket: Failed to receive rest of base packet.");
-				return FALSE;
-			}
-			currentBasePacketOffset += bytesReceived;
-		} while (currentBasePacketOffset >= sizeof(BASE_PACKET));
-
-		DBGPRINT("AfdHook!PopulateBasePacket: Received the rest of the base packet.");
-	}
-	//
-	// If we have more space than a base packet, set the remaining bytes.
-	//
-	else
-	{
-		*RemainingBytes = currentBasePacketOffset - sizeof(BASE_PACKET);
-	}
-
-	return TRUE;
-}
-
-
-VOID
-AfdHook::ProcessMaliciousPacket (
-	_In_ PVOID RecvBuffer,
-	_In_ ULONG RecvBufferSize,
-	_In_ ULONG MagicOffset,
-	_In_ PFILE_OBJECT SocketFileObject,
-	_In_ PDEVICE_OBJECT OriginalDeviceObject,
-	_In_ PAFD_RECV_INFO RecvInformation
-	)
-{
-	BASE_PACKET partialBasePacket;
-	PBASE_PACKET fullBasePacket;
-	ULONG remainingBytes;
-
-	//
-	// Populate the base packet structure.
-	//
-	if (AfdHook::PopulateBasePacket(&partialBasePacket, SocketFileObject, OriginalDeviceObject, RecvInformation, RecvBuffer, RecvBufferSize, MagicOffset, &remainingBytes) == FALSE)
-	{
-		DBGPRINT("AfdHook!ProcessMaliciousPacket: Failed to populate the base packet.");
-		goto Exit;
-	}
-
-	DBGPRINT("AfdHook!ProcessMaliciousPacket: Received base packet with length %i, type %i, and %i extra bytes.", partialBasePacket.PacketLength, partialBasePacket.Type, remainingBytes);
-
-	//
-	// Allocate enough memory for the entire packet.
-	//
-	fullBasePacket = RCAST<PBASE_PACKET>(ExAllocatePoolWithTag(NonPagedPool, partialBasePacket.PacketLength, MALICIOUS_PACKET_TAG));
-	if (fullBasePacket == NULL)
-	{
-		DBGPRINT("AfdHook!ProcessMaliciousPacket: Failed to allocate enough memory for a base packet with the length %i.", partialBasePacket.PacketLength);
-		goto Exit;
-	}
-	memset(fullBasePacket, 0, partialBasePacket.PacketLength);
-
-
-Exit:
-	if (fullBasePacket)
-	{
-		ExFreePoolWithTag(fullBasePacket, MALICIOUS_PACKET_TAG);
-	}
-}
-
-BOOLEAN
-AfdHook::PopulateMaliciousPacket (
-	_Inout_ PBASE_PACKET FullBasePacket,
-	_In_ PBASE_PACKET PartialBasePacket,
-	_In_ PFILE_OBJECT SocketFileObject,
-	_In_ PDEVICE_OBJECT OriginalDeviceObject,
-	_In_ PAFD_RECV_INFO RecvInformation,
-	_In_ PVOID RecvBuffer,
-	_In_ ULONG RecvBufferSize,
-	_In_ ULONG MagicOffset
-	)
-{
-	ULONG remainingBytes;
-	ULONG remainingMaliciousBytes;
-	ULONG currentPacketOffset;
-	ULONG bytesReceived;
-
-	//
-	// First, copy the original base packet.
-	//
-	memcpy_s(FullBasePacket, PartialBasePacket->PacketLength, PartialBasePacket, sizeof(BASE_PACKET));
-	remainingMaliciousBytes = PartialBasePacket->PacketLength - sizeof(BASE_PACKET);
-
-	//
-	// If we have more malicious bytes than necessary, copy those.
-	//
-	if (remainingBytes)
-	{
-		memcpy_s(RCAST<PVOID>(RCAST<ULONG64>(FullBasePacket) + sizeof(BASE_PACKET)),
-			remainingMaliciousBytes,
-			RCAST<PVOID>(RCAST<ULONG64>(RecvBuffer) + MagicOffset + sizeof(BASE_PACKET)),
-			remainingBytes);
-
-		//
-		// Adjust the remaining packets appropriately.
-		//
-		if (remainingBytes >= remainingMaliciousBytes)
-		{
-			remainingMaliciousBytes = 0;
-		}
-		else
-		{
-			remainingMaliciousBytes -= remainingBytes;
-		}
-	}
-
-	DBGPRINT("AfdHook!ProcessMaliciousPacket: There are %i more bytes to receive.", remainingMaliciousBytes);
-
-	//
-	// If necessary, receive the remaining bytes.
-	//
-	if (remainingMaliciousBytes)
-	{
-		do
-		{
-			currentPacketOffset = (PartialBasePacket->PacketLength - sizeof(BASE_PACKET)) - remainingMaliciousBytes;
-			//
-			// Receive the rest of the base packet.
-			//
-			if (AfdHook::ReceiveBuffer(SocketFileObject,
-				OriginalDeviceObject,
-				RCAST<CHAR*>(RCAST<ULONG64>(FullBasePacket) + currentPacketOffset),
-				remainingMaliciousBytes,
-				RecvInformation->AfdFlags,
-				RecvInformation->TdiFlags,
-				&bytesReceived) == FALSE)
-			{
-				DBGPRINT("AfdHook!ProcessMaliciousPacket: Failed to receive rest of full packet.");
-				return FALSE;
-			}
-			remainingMaliciousBytes -= bytesReceived;
-		} while (remainingMaliciousBytes > 0);
-	}
-
-	return TRUE;
 }

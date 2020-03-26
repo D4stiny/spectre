@@ -33,7 +33,7 @@ FileObjHook::FileObjHook (
 	_In_ PWCHAR TargetDeviceName,
 	_In_ HOOK_TYPE Type,
 	_In_ HOOK_DISPATCH MajorFunctionHook,
-	_In_ PFAST_IO_DISPATCH FastIoHook
+	_In_opt_ PFAST_IO_DISPATCH FastIoHook
 	)
 {
 	ULONG hookCount;
@@ -41,6 +41,7 @@ FileObjHook::FileObjHook (
 	this->HookMajorFunction = MajorFunctionHook;
 	CurrentObjHook = this;
 	this->RescanThreadStarted = FALSE;
+	this->ObjectsHooked = FALSE;
 
 	//
 	// If we're hooking FastIo, allocate a new object for it.
@@ -359,7 +360,18 @@ FileObjHook::GenerateHookObjects (
 	memcpy(fakeDriverObject, BaseDeviceObject->DriverObject, fakeDriverObjectSize);
 
 	realDeviceNameHeader = SCAST<POBJECT_HEADER_NAME_INFO>(ObQueryNameInfo(BaseDeviceObject));
+	
+
+	//
+	// Sanity checks
+	//
 	NT_ASSERT(realDeviceNameHeader);
+	if (realDeviceNameHeader == NULL)
+	{
+		DBGPRINT("FileObjHook!GenerateHookObjects: Failed to query object name info.");
+		status = STATUS_NO_MEMORY;
+		goto Exit;
+	}
 
 	//
 	// Generate the object attributes for the fake device object.
