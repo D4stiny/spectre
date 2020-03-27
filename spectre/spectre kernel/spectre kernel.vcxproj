@@ -123,6 +123,7 @@
     <ClCompile Include="AfdHook.cpp" />
     <ClCompile Include="common.cpp" />
     <ClCompile Include="FileObjHook.cpp" />
+    <ClCompile Include="PacketDispatch.cpp" />
     <ClCompile Include="PacketHandler.cpp" />
     <ClCompile Include="spectre.cpp" />
     <ClCompile Include="Utils.cpp" />
@@ -133,6 +134,7 @@
     <ClInclude Include="FileObjHook.h" />
     <ClInclude Include="ntdef.h" />
     <ClInclude Include="PacketHandler.h" />
+    <ClInclude Include="PacketDispatch.h" />
     <ClInclude Include="shared.h" />
     <ClInclude Include="Utils.h" />
   </ItemGroup>

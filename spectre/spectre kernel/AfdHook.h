@@ -7,7 +7,7 @@
 #pragma once
 #include "common.h"
 #include "FileObjHook.h"
-#include "PacketHandler.h"
+#include "PacketDispatch.h"
 
 //
 // Handles IOCTL messages from the \Device\Afd hook.
@@ -39,4 +39,4 @@ public:
 
 #define AFD_DEVICE_BASE_NAME L"Afd"
 #define AFD_FILE_HOOK_TAG 'hFpS'
-#define AFD_PACKET_HANDLER_TAG 'hPpS'
+#define AFD_PACKET_DISPATCH_TAG 'dPpS'

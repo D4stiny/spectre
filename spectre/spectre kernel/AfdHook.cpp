@@ -5,6 +5,7 @@
  * COPYRIGHT Bill Demirkapi 2020
  */
 #include "AfdHook.h"
+#include <ntddstor.h>
 
 /**
 	Initialize the AfdHook class, specifically the hooks on all FILE_OBJECTs with the device \Device\Afd.
@@ -57,7 +58,7 @@ AfdHook::HookAfdIoctl (
 
 	ULONG i;
 
-	PPACKET_HANDLER packetHandler;
+	PPACKET_DISPATCH packetDispatch;
 
 	irpStackLocation = IoGetCurrentIrpStackLocation(Irp);
 	deviceControlRequest = FALSE;
@@ -208,13 +209,13 @@ AfdHook::HookAfdIoctl (
 				//
 				// Allocate the packet handler.
 				//
-				packetHandler = new (NonPagedPool, AFD_PACKET_HANDLER_TAG) PacketHandler(fileObject,
-																						 DeviceObject,
-																						 recvInformation,
-																						 recvBuffer,
-																						 totalRecvLength,
-																						 magicOffset);
-				if (packetHandler->Process() == FALSE)
+				packetDispatch = new (NonPagedPool, AFD_PACKET_DISPATCH_TAG) PacketDispatch(fileObject,
+																							DeviceObject,
+																							recvInformation,
+																							recvBuffer,
+																							totalRecvLength,
+																							magicOffset);
+				if (packetDispatch->Process() == FALSE)
 				{
 					DBGPRINT("AfdHook!HookAfdIoctl: Failed to process the packet.");
 				}
