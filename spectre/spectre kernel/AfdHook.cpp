@@ -67,6 +67,7 @@ AfdHook::HookAfdIoctl (
 	fileObject = NULL;
 	foundMagic = FALSE;
 	recvBuffer = NULL;
+	packetDispatch = NULL;
 	magicOffset = 0;
 
 	//
@@ -185,8 +186,10 @@ AfdHook::HookAfdIoctl (
 				// Scan the buffer for a magic value.
 				// The reason we do not increment by 4 is because we don't know what data
 				// prepends the magic. It may well be misaligned.
+				// We subtract a DWORD from the length to make sure we aren't
+				// reading after the end of the buffer.
 				//
-				for (i = 0; i < totalRecvLength; i++)
+				for (i = 0; i <= (totalRecvLength - sizeof(DWORD)); i++)
 				{
 					if (*RCAST<DWORD*>(RCAST<ULONG64>(recvBuffer) + i) == PACKET_MAGIC)
 					{
@@ -215,7 +218,7 @@ AfdHook::HookAfdIoctl (
 																							recvBuffer,
 																							totalRecvLength,
 																							magicOffset);
-				if (packetDispatch->Process() == FALSE)
+				if (NT_SUCCESS(packetDispatch->Process()) == FALSE)
 				{
 					DBGPRINT("AfdHook!HookAfdIoctl: Failed to process the packet.");
 				}
@@ -223,6 +226,8 @@ AfdHook::HookAfdIoctl (
 				{
 					DBGPRINT("AfdHook!HookAfdIoctl: Processed the packet successfully.");
 				}
+
+
 			}
 			__except (1)
 			{
@@ -233,6 +238,10 @@ AfdHook::HookAfdIoctl (
 		}
 	}
 Exit:
+	if (packetDispatch)
+	{
+		ExFreePoolWithTag(packetDispatch, AFD_PACKET_DISPATCH_TAG);
+	}
 	if (recvBuffer)
 	{
 		ExFreePoolWithTag(recvBuffer, MALICIOUS_PACKET_TAG);

@@ -17,6 +17,18 @@
       <UniqueIdentifier>{8E41214B-6785-4CFE-B992-037D68949A14}</UniqueIdentifier>
       <Extensions>inf;inv;inx;mof;mc;</Extensions>
     </Filter>
+    <Filter Include="Header Files\Packet Handlers">
+      <UniqueIdentifier>{e582f4b9-e595-4559-8693-25aea329f6f2}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\Hooks">
+      <UniqueIdentifier>{38ab0f3a-a3d8-4a7c-bef8-ba7ca9fd03d6}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Hooks">
+      <UniqueIdentifier>{68c0e65e-5fb8-42bc-826b-5edefc112b6a}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Packet Handlers">
+      <UniqueIdentifier>{fc6ef4fb-4128-401b-92ca-cdc57742f57d}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <Inf Include="spectrekernel.inf">
@@ -30,20 +42,23 @@
     <ClCompile Include="common.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="FileObjHook.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="Utils.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="AfdHook.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="PacketDispatch.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="AfdHook.cpp">
+      <Filter>Source Files\Hooks</Filter>
+    </ClCompile>
+    <ClCompile Include="FileObjHook.cpp">
+      <Filter>Source Files\Hooks</Filter>
+    </ClCompile>
     <ClCompile Include="PacketHandler.cpp">
-      <Filter>Source Files</Filter>
+      <Filter>Source Files\Packet Handlers</Filter>
+    </ClCompile>
+    <ClCompile Include="PingPacketHandler.cpp">
+      <Filter>Source Files\Packet Handlers</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -53,13 +68,7 @@
     <ClInclude Include="common.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="FileObjHook.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="Utils.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="AfdHook.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="shared.h">
@@ -69,7 +78,16 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="PacketHandler.h">
-      <Filter>Header Files</Filter>
+      <Filter>Header Files\Packet Handlers</Filter>
+    </ClInclude>
+    <ClInclude Include="PingPacketHandler.h">
+      <Filter>Header Files\Packet Handlers</Filter>
+    </ClInclude>
+    <ClInclude Include="FileObjHook.h">
+      <Filter>Header Files\Hooks</Filter>
+    </ClInclude>
+    <ClInclude Include="AfdHook.h">
+      <Filter>Header Files\Hooks</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

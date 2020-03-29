@@ -10,6 +10,7 @@
 
 typedef class PacketHandler
 {
+protected:
 	//
 	// The packet dispatcher is used for sending and receiving network messages.
 	// It can also be used to dispatch a sub-packet.
@@ -20,7 +21,7 @@ public:
 		_In_ PPACKET_DISPATCH Dispatcher
 		);
 	
-	virtual BOOLEAN ProcessPacket (
+	virtual NTSTATUS ProcessPacket (
 		_In_ PBASE_PACKET FullPacket
-		);
+		) = 0;
 } PACKET_HANDLER, *PPACKET_HANDLER;

@@ -125,6 +125,7 @@
     <ClCompile Include="FileObjHook.cpp" />
     <ClCompile Include="PacketDispatch.cpp" />
     <ClCompile Include="PacketHandler.cpp" />
+    <ClCompile Include="PingPacketHandler.cpp" />
     <ClCompile Include="spectre.cpp" />
     <ClCompile Include="Utils.cpp" />
   </ItemGroup>
@@ -135,6 +136,7 @@
     <ClInclude Include="ntdef.h" />
     <ClInclude Include="PacketHandler.h" />
     <ClInclude Include="PacketDispatch.h" />
+    <ClInclude Include="PingPacketHandler.h" />
     <ClInclude Include="shared.h" />
     <ClInclude Include="Utils.h" />
   </ItemGroup>

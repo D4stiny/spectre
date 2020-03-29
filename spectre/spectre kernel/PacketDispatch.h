@@ -9,23 +9,14 @@
 
 typedef class PacketDispatch
 {
-	BOOLEAN PopulateBasePacket (
+	NTSTATUS PopulateBasePacket (
 		_Inout_ PBASE_PACKET PartialBasePacket,
 		_Inout_ ULONG* RemainingBytes
 		);
-	BOOLEAN PopulateMaliciousPacket (
+	NTSTATUS PopulateMaliciousPacket (
 		_In_ PBASE_PACKET PartialBasePacket,
 		_Inout_ PBASE_PACKET FullBasePacket,
 		_In_ ULONG RemainingBytes
-		);
-	BOOLEAN SendBuffer (
-		_In_ CHAR* Buffer,
-		_In_ SIZE_T BufferSize
-		);
-	BOOLEAN ReceiveBuffer (
-		_In_ CHAR* Buffer,
-		_In_ SIZE_T BufferSize,
-		_Inout_ ULONG* BytesReceived
 		);
 	NTSTATUS SendSynchronousAfdRequest (
 		_In_ ULONG IoctlCode,
@@ -33,10 +24,6 @@ typedef class PacketDispatch
 		_In_ ULONG InputBufferSize,
 		_In_ PIO_STATUS_BLOCK IoStatusBlock
 		);
-	BOOLEAN Dispatch (
-		_In_ PBASE_PACKET FullPacket
-		);
-
 	//
 	// Constant used as a maximum amount of retries.
 	//
@@ -80,8 +67,20 @@ public:
 		_In_ ULONG RecvBufferSize,
 		_In_ ULONG MagicOffset
 		);
-	BOOLEAN Process (
+	NTSTATUS Process (
 		VOID
+		);
+	BOOLEAN SendBuffer (
+		_In_ PVOID Buffer,
+		_In_ SIZE_T BufferSize
+		);
+	BOOLEAN ReceiveBuffer (
+		_In_ PVOID Buffer,
+		_In_ SIZE_T BufferSize,
+		_Inout_ ULONG* BytesReceived
+		);
+	NTSTATUS Dispatch (
+		_In_ PBASE_PACKET FullPacket
 		);
 } PACKET_DISPATCH, *PPACKET_DISPATCH;
 

