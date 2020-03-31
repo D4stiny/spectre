@@ -60,6 +60,9 @@
     <ClCompile Include="PingPacketHandler.cpp">
       <Filter>Source Files\Packet Handlers</Filter>
     </ClCompile>
+    <ClCompile Include="XorPacketHandler.cpp">
+      <Filter>Source Files\Packet Handlers</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ntdef.h">
@@ -88,6 +91,9 @@
     </ClInclude>
     <ClInclude Include="AfdHook.h">
       <Filter>Header Files\Hooks</Filter>
+    </ClInclude>
+    <ClInclude Include="XorPacketHandler.h">
+      <Filter>Header Files\Packet Handlers</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

@@ -128,6 +128,7 @@
     <ClCompile Include="PingPacketHandler.cpp" />
     <ClCompile Include="spectre.cpp" />
     <ClCompile Include="Utils.cpp" />
+    <ClCompile Include="XorPacketHandler.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="AfdHook.h" />
@@ -139,6 +140,7 @@
     <ClInclude Include="PingPacketHandler.h" />
     <ClInclude Include="shared.h" />
     <ClInclude Include="Utils.h" />
+    <ClInclude Include="XorPacketHandler.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

