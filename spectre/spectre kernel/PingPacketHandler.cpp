@@ -29,7 +29,7 @@ PingPacketHandler::ProcessPacket (
     // For pings, just respond with another ping packet.
     //
     responsePacket.Magic = PACKET_MAGIC;
-    responsePacket.Base.Type = Ping;
+    responsePacket.Base.Type = PACKET_TYPE::Ping;
     responsePacket.Base.PacketLength = sizeof(responsePacket);
 
     //

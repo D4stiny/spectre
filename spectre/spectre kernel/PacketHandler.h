@@ -13,7 +13,7 @@ typedef class PacketHandler
 protected:
 	//
 	// The packet dispatcher is used for sending and receiving network messages.
-	// It can also be used to dispatch a sub-packet.
+	// It can also be used to dispatch a new packet.
 	//
 	PPACKET_DISPATCH PacketDispatch;
 public:
