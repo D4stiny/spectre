@@ -8,7 +8,7 @@
 #include "common.h"
 #include "Utils.h"
 
-typedef enum HookType
+typedef enum class HookType
 {
 	DirectHook	// A direct hook indicates that the FileObjHook should simply set the IRP_MJ_DEVICE_CONTROL entry of the DriverObject to the hook function.
 } HOOK_TYPE;
@@ -30,9 +30,9 @@ typedef struct NamedDeviceObject
 #define OBJECT_NAME_OFFSET (sizeof(OBJECT_HEADER_NAME_INFO) + FIELD_OFFSET(OBJECT_HEADER, Body))
 
 //
-// Time interval (seconds) before updating hooks for the FILE_OBJECT.
+// Time interval (milliseconds) before updating hooks for the FILE_OBJECT.
 //
-#define HOOK_UPDATE_TIME 500
+#define HOOK_UPDATE_TIME 2000
 
 typedef HOOK_DISPATCH* PHOOK_DISPATCH;
 
@@ -86,13 +86,13 @@ typedef class FileObjHook
 	//
 	static PDRIVER_DISPATCH OriginalDispatch[IRP_MJ_MAXIMUM_FUNCTION + 1];
 	//
-	// Whether or not the scanning thread was started.
-	//
-	BOOLEAN RescanThreadStarted;
-	//
 	// The functions to redirect FastIo operations to.
 	//
 	static PFAST_IO_DISPATCH HookFastIoTable;
+	//
+	// The name of the device object to hook.
+	//
+	static WCHAR TargetDevice[MAX_PATH];
 public:
 	//
 	// Whether or not there is an ongoing hook.
@@ -114,13 +114,11 @@ public:
 		);
 } FILE_OBJ_HOOK, *PFILE_OBJ_HOOK;
 
-#define HANDLE_INFO_TAG 'iHpS'
-#define OBJECT_TYPE_TAG 'tOpS'
-#define FAST_IO_TABLE_TAG 'iFpS'
-#define DEVICE_OBJECT_TAG 'iveD'
-#define DRIVER_OBJECT_TAG 'virD'
-
-#define SYSTEMTIME_TO_MILLISECONDS(systemtime) systemtime.QuadPart / 10000
-#define MILLISECONDS_TO_SYSTEMTIME(milliseconds) milliseconds * 10000
+#define HANDLE_INFO_TAG DEFINE_TAG('iHpS')
+#define OBJECT_TYPE_TAG DEFINE_TAG('tOpS')
+#define FAST_IO_TABLE_TAG DEFINE_TAG('iFpS')
+#define DEVICE_OBJECT_TAG DEFINE_TAG('iveD')
+#define DRIVER_OBJECT_TAG DEFINE_TAG('virD')
+#define FILE_OBJECT_LOCK_TAG DEFINE_TAG('lFpS')
 
 extern PFILE_OBJ_HOOK CurrentObjHook;

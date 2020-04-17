@@ -16,6 +16,7 @@ PDEVICE_OBJECT FileObjHook::OriginalDeviceObject;
 PDEVICE_OBJECT FileObjHook::FakeDeviceObject;
 PFAST_IO_DISPATCH FileObjHook::HookFastIoTable;
 FAST_IO_DISPATCH FileObjHook::OriginalFastIo;
+WCHAR FileObjHook::TargetDevice[MAX_PATH];
 
 //
 // Represents the current hook object needed by the dispatch function.
@@ -36,11 +37,11 @@ FileObjHook::FileObjHook (
 	_In_opt_ PFAST_IO_DISPATCH FastIoHook
 	)
 {
-	ULONG hookCount;
+	RTL_PROCESS_MODULE_INFORMATION ntoskrnlModule;
+	
 	this->HookType = Type;
 	this->HookMajorFunction = MajorFunctionHook;
 	CurrentObjHook = this;
-	this->RescanThreadStarted = FALSE;
 	this->ObjectsHooked = FALSE;
 
 	//
@@ -60,12 +61,30 @@ FileObjHook::FileObjHook (
 		//
 		memcpy(FileObjHook::HookFastIoTable, FastIoHook, sizeof(FAST_IO_DISPATCH));
 	}
+	
+	//
+	// Copy the target device name.
+	//
+	wcscpy_s(TargetDevice, TargetDeviceName);
 
 	//
-	// Do not return until we get at least 1 hook.
-	// This is required to start the rescan thread.
+	// Retrieve the ntoskrnl module.
 	//
-	while (this->SearchAndHook(TargetDeviceName, &hookCount) && hookCount == 0);
+	ntoskrnlModule = Utilities::GetDriverModule("ntoskrnl.exe");
+
+	//
+	// If we don't get a valid ntoskrnl module, we have much more serious problems...
+	//
+	NT_ASSERT(ntoskrnlModule.ImageBase);
+
+	//
+	// Start the scanning thread.
+	//
+	if (Utilities::CreateHiddenThread(ntoskrnlModule.ImageBase, FileObjHook::RehookThread) == FALSE)
+	{
+		DBGPRINT("FileObjHook!FileObjHook: Failed to start scanning function.");
+		return;
+	}
 }
 
 /**
@@ -88,6 +107,7 @@ FileObjHook::IsHandleFile (
 
 	isFileObject = FALSE;
 	objectTypeSize = 0;
+	objectType = NULL;
 
 	//
 	// Attach to the target process to query the handle's type.
@@ -97,12 +117,24 @@ FileObjHook::IsHandleFile (
 	//
 	// Query the appropriate size for the handle's type object.
 	//
-	ZwQueryObject(Handle, ObjectTypeInformation, NULL, 0, &objectTypeSize);
+	status = ZwQueryObject(Handle, ObjectTypeInformation, NULL, 0, &objectTypeSize);
+
+	//
+	// The status should always be STATUS_INFO_LENGTH_MISMATCH because
+	// we provide insufficient data. Otherwise a bad handle.
+	//
+	if (status != STATUS_INFO_LENGTH_MISMATCH || objectTypeSize == 0)
+	{
+		//DBGPRINT("FileObjHook!IsHandleFile: Received object type size %i with status 0x%X.", objectTypeSize, status);
+		goto Exit;
+	}
+
+	objectTypeSize += sizeof(ULONG_PTR);
 
 	//
 	// Allocate the appropriate type information.
 	//
-	objectType = SCAST<POBJECT_TYPE_INFORMATION>(ExAllocatePoolWithTag(PagedPool, objectTypeSize, OBJECT_TYPE_TAG));
+	objectType = RCAST<POBJECT_TYPE_INFORMATION>(ExAllocatePoolWithTag(PagedPool, objectTypeSize, OBJECT_TYPE_TAG));
 	if (objectType == NULL)
 	{
 		DBGPRINT("FileObjHook!IsHandleFile: Failed to allocate %i bytes for object type size.", objectTypeSize);
@@ -114,8 +146,6 @@ FileObjHook::IsHandleFile (
 	// Query the object type.
 	//
 	status = ZwQueryObject(Handle, ObjectTypeInformation, objectType, objectTypeSize, &objectTypeSize);
-
-	KeUnstackDetachProcess(&apcState);
 
 	//
 	// Check if the query was successful.
@@ -148,6 +178,7 @@ Exit:
 	{
 		ExFreePoolWithTag(objectType, OBJECT_TYPE_TAG);
 	}
+	KeUnstackDetachProcess(&apcState);
 	return isFileObject;
 }
 
@@ -278,22 +309,6 @@ FileObjHook::SearchAndHook (
 			}
 			//DBGPRINT("FileObjHook!SearchAndHook: Hooked FILE_OBJECT 0x%llx.", currentFileObject);
 			(*HookCount)++;
-
-			//
-			// Check if we need to start the rescan thread.
-			//
-			if (this->RescanThreadStarted == FALSE)
-			{
-				DBGPRINT("FileObjHook!SearchAndHook: Rescan thread not started, starting.");
-
-				//
-				// Start the hidden rescan thread.
-				//
-				if (Utilities::CreateHiddenThread(currentFileObject->DeviceObject->DriverObject, FileObjHook::RehookThread))
-				{
-					this->RescanThreadStarted = TRUE;
-				}
-			}
 		}
 	}
 Exit:
@@ -318,6 +333,7 @@ FileObjHook::GenerateHookObjects (
 	PDRIVER_OBJECT fakeDriverObject;
 	OBJECT_ATTRIBUTES fakeDriverAttributes;
 	CSHORT fakeDriverObjectSize;
+	CSHORT fakeDeviceObjectSize;
 
 	OBJECT_ATTRIBUTES fakeDeviceAttributes;
 	POBJECT_HEADER_NAME_INFO realDeviceNameHeader;
@@ -347,7 +363,15 @@ FileObjHook::GenerateHookObjects (
 	//
 	// Create the fake driver object.
 	//
-	status = ObCreateObject(KernelMode, *IoDriverObjectType, &fakeDriverAttributes, KernelMode, NULL, fakeDriverObjectSize, 0, 0, RCAST<PVOID*>(&fakeDriverObject));
+	status = ObCreateObject(KernelMode,
+							*IoDriverObjectType,
+							&fakeDriverAttributes,
+							KernelMode,
+							NULL,
+							fakeDriverObjectSize,
+							0,
+							0,
+							RCAST<PVOID*>(&fakeDriverObject));
 	if (NT_SUCCESS(status) == FALSE)
 	{
 		DBGPRINT("FileObjHook!GenerateHookObjects: Failed to create the fake driver object with status 0x%X.", status);
@@ -360,7 +384,6 @@ FileObjHook::GenerateHookObjects (
 	memcpy(fakeDriverObject, BaseDeviceObject->DriverObject, fakeDriverObjectSize);
 
 	realDeviceNameHeader = SCAST<POBJECT_HEADER_NAME_INFO>(ObQueryNameInfo(BaseDeviceObject));
-	
 
 	//
 	// Sanity checks
@@ -382,6 +405,8 @@ FileObjHook::GenerateHookObjects (
 							   NULL,
 							   BaseDeviceObject->SecurityDescriptor);
 
+	fakeDeviceObjectSize = sizeof(DEVICE_OBJECT) + sizeof(EXTENDED_DEVOBJ_EXTENSION);
+
 	//
 	// Check if the original device is exclusive.
 	//
@@ -393,19 +418,27 @@ FileObjHook::GenerateHookObjects (
 	//
 	// Create the fake device object.
 	//
-	status = ObCreateObject(KernelMode, *IoDeviceObjectType, &fakeDeviceAttributes, KernelMode, NULL, sizeof(DEVICE_OBJECT) + sizeof(EXTENDED_DEVOBJ_EXTENSION), 0, 0, RCAST<PVOID*>(&FileObjHook::FakeDeviceObject));
+	status = ObCreateObject(KernelMode,
+							*IoDeviceObjectType,
+							&fakeDeviceAttributes,
+							KernelMode,
+							NULL,
+							fakeDeviceObjectSize,
+							0,
+							0,
+							RCAST<PVOID*>(&FileObjHook::FakeDeviceObject));
 	if (NT_SUCCESS(status) == FALSE)
 	{
 		DBGPRINT("FileObjHook!GenerateHookObjects: Failed to create the fake device object with status 0x%X.", status);
 		goto Exit;
 	}
 
-	DBGPRINT("FileObjHook!GenerateHookObjects: Created fake device at 0x%llx.", FileObjHook::FakeDeviceObject);
-
 	//
 	// Copy the existing object.
 	//
-	memcpy(FileObjHook::FakeDeviceObject, BaseDeviceObject, sizeof(DEVICE_OBJECT) + sizeof(EXTENDED_DEVOBJ_EXTENSION));
+	memcpy(FileObjHook::FakeDeviceObject, BaseDeviceObject, fakeDeviceObjectSize);
+
+	DBGPRINT("FileObjHook!GenerateHookObjects: Created fake device at 0x%llx.", FileObjHook::FakeDeviceObject);
 
 	//
 	// Update the driver and device object attributes in the respective objects.
@@ -418,7 +451,7 @@ FileObjHook::GenerateHookObjects (
 	//
 	switch (this->HookType)
 	{
-	case DirectHook:
+	case HookType::DirectHook:
 		//
 		// Place MajorFunction hooks and store the original function.
 		//
@@ -488,6 +521,7 @@ FileObjHook::HookFileObject (
 	)
 {
 	PDEVICE_OBJECT oldDeviceObject;
+	PRKMUTEX fileObjectLock;
 
 	//
 	// Check if we've already hooked this FILE_OBJECT.
@@ -507,11 +541,37 @@ FileObjHook::HookFileObject (
 			return FALSE;
 		}
 	}
+
+	//
+	// Allocate space for a lock.
+	//
+	fileObjectLock = RCAST<PRKMUTEX>(ExAllocatePoolWithTag(NonPagedPool, sizeof(KMUTEX), FILE_OBJECT_LOCK_TAG));
+	if (fileObjectLock == NULL)
+	{
+		DBGPRINT("FileObjHook!HookFileObject: Failed to allocate lock object, aborting.");
+		return FALSE;
+	}
+
+	memset(fileObjectLock, 0, sizeof(KMUTEX));
+	KeInitializeMutex(fileObjectLock, 0);
 	
+	//
+	// Sanity check.
+	//
+	if (FileObject->FsContext2)
+	{
+		NT_ASSERT(FALSE);
+	}
+
+	//
+	// Set the context of the file object to our lock.
+	//
+	FileObject->FsContext2 = fileObjectLock;
+
 	//
 	// Atomically hook the device object of the file.
 	//
-	oldDeviceObject = reinterpret_cast<PDEVICE_OBJECT>(InterlockedExchange64(RCAST<PLONG64>(&FileObject->DeviceObject), RCAST<LONG64>(FileObjHook::FakeDeviceObject)));
+	oldDeviceObject = RCAST<PDEVICE_OBJECT>(InterlockedExchange64(RCAST<PLONG64>(&FileObject->DeviceObject), RCAST<LONG64>(FileObjHook::FakeDeviceObject)));
 
 	//
 	// If we hit this assert, it means we're hooking a different device which should never happen.
@@ -531,11 +591,12 @@ FileObjHook::RehookThread (
 	_In_ PVOID Arg1
 	)
 {
-	POBJECT_HEADER_NAME_INFO fileDeviceName;
 	LARGE_INTEGER sleepInterval;
 	ULONG hookCount;
 
 	UNREFERENCED_PARAMETER(Arg1);
+
+	hookCount = 0;
 
 	//
 	// Sleep for HOOK_UPDATE_TIME seconds after hooking.
@@ -543,20 +604,16 @@ FileObjHook::RehookThread (
 	sleepInterval.QuadPart = MILLISECONDS_TO_SYSTEMTIME(HOOK_UPDATE_TIME);
 	sleepInterval.QuadPart *= -1;
 
-	//
-	// Query the device name we're gonna be hooking.
-	//
-	fileDeviceName = SCAST<POBJECT_HEADER_NAME_INFO>(ObQueryNameInfo(FileObjHook::OriginalDeviceObject));
-
 	while (TRUE)
 	{
 		//
 		// Search for new objects and hook those as well.
 		//
-		CurrentObjHook->SearchAndHook(fileDeviceName->Name.Buffer, &hookCount);
+		CurrentObjHook->SearchAndHook(FileObjHook::TargetDevice, &hookCount);
 
 		//
 		// Sleep for designated time.
+		// Let's not kill the CPU?
 		//
 		KeDelayExecutionThread(KernelMode, FALSE, &sleepInterval);
 	}
@@ -575,6 +632,7 @@ FileObjHook::DispatchHook (
 	)
 {
 	PIO_STACK_LOCATION irpStackLocation;
+	PRKMUTEX fileObjectLock;
 
 	UNREFERENCED_PARAMETER(DeviceObject);
 
@@ -583,12 +641,20 @@ FileObjHook::DispatchHook (
 	//
 	// When a hooked handle is being closed, we need to restore the original device object.
 	//
-	if (irpStackLocation->MajorFunction == IRP_MJ_CLOSE)
+	if (irpStackLocation->MajorFunction == IRP_MJ_CLEANUP)
 	{
 		//
 		// Set the current device object to the original device object.
 		//
 		irpStackLocation->FileObject->DeviceObject = FileObjHook::OriginalDeviceObject;
+
+		//
+		// Free our file object lock.
+		// TODO: Investigate potential race conditions.
+		//
+		fileObjectLock = RCAST<PRKMUTEX>(irpStackLocation->FileObject->FsContext2);
+		irpStackLocation->FileObject->FsContext2 = NULL;
+		ExFreePoolWithTag(fileObjectLock, FILE_OBJECT_LOCK_TAG);
 
 		DBGPRINT("FileObjHook!DispatchHook: Unhooked process 0x%X, file object 0x%llx, device object 0x%llx.", PsGetCurrentProcessId(), irpStackLocation->FileObject, DeviceObject);
 	}
