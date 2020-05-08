@@ -7,6 +7,11 @@
 #pragma once
 #include "common.h"
 
+//
+// Maximum operation time (in ms). Applied for any send or receive operations.
+//
+#define MAX_OPERATION_TIME 5000
+
 typedef class PacketDispatch
 {
 	NTSTATUS PopulateBasePacket (

