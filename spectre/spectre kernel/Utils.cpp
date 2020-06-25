@@ -478,6 +478,333 @@ Utilities::PeekNamedPipe (
 }
 
 /**
+	Copies a string into a process parameter structure.
+	@param ProcessParameters - Pointer to the process parameter structure we're editing.
+	@param NormalizedOffset - Offset of where to put the Source string. Should be greater than sizeof(RTL_USER_PROCESS_PARAMETERS) since buffers are placed after the main structure.
+	@param TargetParameter - The target UNICODE_STRING structure to update.
+	@param Source - The source string.
+*/
+VOID
+CopyParameterUnicodeString (
+	_Inout_ PRTL_USER_PROCESS_PARAMETERS ProcessParameters,
+	_In_ ULONG NormalizedOffset,
+	_In_ PUNICODE_STRING TargetParameter,
+	_In_ PUNICODE_STRING Source
+	)
+{
+	//
+	// Copy the original unicode string.
+	//
+	memcpy(TargetParameter, Source, sizeof(UNICODE_STRING));
+
+	//
+	// Calculate the buffer to copy the source buffer to.
+	//
+	TargetParameter->Buffer = RCAST<PWCH>(RCAST<ULONG64>(ProcessParameters) + NormalizedOffset);
+
+	//
+	// Copy the source string.
+	//
+	memcpy(RCAST<PVOID>(TargetParameter->Buffer), Source->Buffer, Source->Length);
+}
+
+/**
+	Start a user-mode process.
+	@param CurrentDirectory - The current directory of the new process.
+	@param ProcessImageName - The path of the new process.
+	@param CommandLine - The command line arguments for the new process.
+	@param Timeout - How long to wait for the process to exit (in milliseconds).
+	@param StdOutHandle - An optional HANDLE to redirect StdOut and StdErr to.
+	@return Status of process creation.
+*/
+NTSTATUS
+Utilities::StartProcess (
+	_In_ PUNICODE_STRING CurrentDirectory,
+	_In_ PUNICODE_STRING ProcessImageName,
+	_In_ PUNICODE_STRING CommandLine,
+	_In_ CONST LONG Timeout,
+	_In_opt_ PHANDLE StdOutHandle
+	)
+{
+	NTSTATUS status;
+	HANDLE processHandle;
+	HANDLE threadHandle;
+
+	ULONG attrListCount;
+	ULONG attrListSize;
+	PPS_ATTRIBUTE_LIST attrList;
+
+	UNICODE_STRING defaultDesktop;
+	ULONG userParamsSize;
+	PRTL_USER_PROCESS_PARAMETERS userParams;
+	ULONG currentParamsOffset;
+
+	PS_CREATE_INFO createInfo;
+	LARGE_INTEGER timeout;
+
+	NtFunctionResolver* ntFunctionResolver;
+	static ZwCreateUserProcess_t ZwCreateUserProcess = NULL;
+	ULONG syscallNumber;
+
+	UNICODE_STRING dllPathUnicode;
+
+	CONST WCHAR DllPath[] = L"C:\\Windows\\system32;;C:\\Windows\\system32;C:\\Windows\\system;C:\\Windows;.;C:\\Windows\\system32;C:\\Windows;C:\\Windows\\System32\\Wbem;C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\";
+
+	memset(&createInfo, 0, sizeof(createInfo));
+
+	status = STATUS_NO_MEMORY;
+	processHandle = NULL;
+	threadHandle = NULL;
+	attrList = NULL;
+	userParams = NULL;
+	ntFunctionResolver = NULL;
+
+	RtlInitUnicodeString(&dllPathUnicode, DllPath);
+
+	if (ZwCreateUserProcess == NULL)
+	{
+		ntFunctionResolver = new (NonPagedPool, NT_FUNCTION_RESOLVER_TAG) NtFunctionResolver();
+		
+		//
+		// Load the ntdll module from disk.
+		//
+		status = ntFunctionResolver->LoadNtdllModule();
+		if (NT_SUCCESS(status) == FALSE)
+		{
+			DBGPRINT("Utilities!StartProcess: Failed to load ntdll.");
+			goto Exit;
+		}
+
+		//
+		// Find the system call number for NtCreateUserProcess.
+		//
+		syscallNumber = ntFunctionResolver->FindExportSyscall("NtCreateUserProcess");
+		if (syscallNumber == -1)
+		{
+			DBGPRINT("Utilities!StartProcess: Failed to find system call.");
+			goto Exit;
+		}
+
+		//
+		// Find ZwCreateUserProcess via its system call number.
+		//
+		ZwCreateUserProcess = RCAST<ZwCreateUserProcess_t>(ntFunctionResolver->FindSyscallZwFunction(syscallNumber));
+		if (ZwCreateUserProcess == NULL)
+		{
+			DBGPRINT("Utilities!StartProcess: Failed to find ZwCreateUserProcess.");
+			NT_ASSERT(FALSE);
+			goto Exit;
+		}
+
+		DBGPRINT("Utilities!StartProcess: ZwCreateUserProcess = 0x%llx.", ZwCreateUserProcess);
+	}
+	
+	//
+	// Sanity checks.
+	//
+	if(CurrentDirectory == NULL ||
+	   CurrentDirectory->Buffer == NULL ||
+	   CommandLine == NULL ||
+	   CommandLine->Buffer == NULL ||
+	   ProcessImageName == NULL ||
+	   ProcessImageName->Buffer == NULL)
+	{
+		DBGPRINT("Utilities!StartProcess: NULL SANITY CHECK TRIGGERED.");
+		NT_ASSERT(FALSE);
+		goto Exit;
+	}
+
+	//
+	// Initialize the default Window station string.
+	//
+	RtlInitUnicodeString(&defaultDesktop, L"Winsta0\\Default");
+
+	//
+	// Relative time is negative.
+	//
+	timeout.QuadPart = -MILLISECONDS_TO_SYSTEMTIME(Timeout);
+
+	//
+	// Set the attributes for the process.
+	// If an StdOut handle is specified, we have three attributes.
+	//
+	attrListCount = 1;
+	//if (StdOutHandle)
+	//{
+	//	attrListCount = 2;
+	//}
+	attrListSize = sizeof(PS_ATTRIBUTE_LIST) + ((attrListCount-1) * sizeof(PS_ATTRIBUTE));
+	attrList = RCAST<PPS_ATTRIBUTE_LIST>(ExAllocatePoolWithTag(NonPagedPool, attrListSize, PROCESS_ATTRIBUTES_TAG));
+	if (attrList == NULL)
+	{
+		DBGPRINT("Utilities!StartProcess: Failed to allocate memory for process attributes.");
+		goto Exit;
+	}
+	memset(attrList, 0, attrListSize);
+
+	//
+	// Set the image name.
+	//
+	attrList->TotalLength = attrListSize;
+	attrList->Attributes[0].Attribute = PsAttributeValue(PsAttributeImageName, FALSE, TRUE, FALSE);
+	attrList->Attributes[0].Size = ProcessImageName->Length;
+	attrList->Attributes[0].Value = RCAST<ULONG_PTR>(ProcessImageName->Buffer);
+
+	//
+	// Set the fake parent process.
+	//
+	//attrList->Attributes[1].Attribute = PsAttributeValue(PsAttributeParentProcess, FALSE, TRUE, TRUE);
+	//attrList->Attributes[1].Size = sizeof(HANDLE);
+	//attrList->Attributes[1].Value = RCAST<ULONG_PTR>(ParentProcess);
+
+	//
+	// Set the StdOut handle.
+	//
+	//if (StdOutHandle)
+	//{
+	//	attrList->Attributes[1].Attribute = PsAttributeValue(PsAttributeStdHandleInfo, FALSE, TRUE, FALSE);
+	//	attrList->Attributes[1].Size = sizeof(BOOLEAN);
+	//	attrList->Attributes[1].Value = 1;
+	//}
+
+	//
+	// Calculate the size necessary for the parameters.
+	//
+	userParamsSize = sizeof(RTL_USER_PROCESS_PARAMETERS);
+	userParamsSize += ALIGN(CurrentDirectory->Length + sizeof(WCHAR), sizeof(ULONG));
+	userParamsSize += ALIGN(CommandLine->Length + sizeof(WCHAR), sizeof(ULONG));
+	userParamsSize += ALIGN(ProcessImageName->Length + sizeof(WCHAR), sizeof(ULONG));
+	userParamsSize += ALIGN(defaultDesktop.Length + sizeof(WCHAR), sizeof(ULONG));
+	userParamsSize += ALIGN(dllPathUnicode.Length + sizeof(WCHAR), sizeof(ULONG));
+
+	//
+	// Allocate space for the parameters.
+	//
+	userParams = RCAST<PRTL_USER_PROCESS_PARAMETERS>(ExAllocatePoolWithTag(NonPagedPool, userParamsSize, PROCESS_PARAMETERS_TAG));
+	if (userParams == NULL)
+	{
+		DBGPRINT("Utilities!StartProcess: Failed to allocate memory for process parameters.");
+		goto Exit;
+	}
+	memset(userParams, 0, userParamsSize);
+
+	//
+	// Set standard structure members.
+	//
+	userParams->Length = userParamsSize;
+	userParams->MaximumLength = userParamsSize;
+	userParams->Flags = RTL_USER_PROCESS_PARAMETERS_NORMALIZED;
+
+	//
+	// Hide the window.
+	//
+	userParams->WindowFlags = STARTF_USESHOWWINDOW;
+	if (StdOutHandle)
+	{
+		userParams->WindowFlags |= STARTF_USESTDHANDLES;
+		userParams->StandardOutput = *StdOutHandle;
+		//userParams->StandardError = *StdOutHandle;
+	}
+	userParams->ShowWindowFlags = 0;
+
+	//
+	// Copy the unicode strings over and normalize.
+	//
+	currentParamsOffset = sizeof(RTL_USER_PROCESS_PARAMETERS);
+
+	//
+	// Copy the current directory.
+	//
+	CopyParameterUnicodeString(userParams, currentParamsOffset, &userParams->CurrentDirectory.DosPath, CurrentDirectory);
+	currentParamsOffset += ALIGN(CurrentDirectory->Length + sizeof(WCHAR), sizeof(ULONG));
+
+	//
+	// Copy the command line.
+	//
+	CopyParameterUnicodeString(userParams, currentParamsOffset, &userParams->CommandLine, CommandLine);
+	currentParamsOffset += ALIGN(CommandLine->Length + sizeof(WCHAR), sizeof(ULONG));
+
+	//
+	// Copy the process image path.
+	//
+	CopyParameterUnicodeString(userParams, currentParamsOffset, &userParams->ImagePathName, ProcessImageName);
+	currentParamsOffset += ALIGN(ProcessImageName->Length + sizeof(WCHAR), sizeof(ULONG));
+
+	//
+	// Copy the default desktop.
+	//
+	CopyParameterUnicodeString(userParams, currentParamsOffset, &userParams->DesktopInfo, &defaultDesktop);
+	currentParamsOffset += ALIGN(defaultDesktop.Length + sizeof(WCHAR), sizeof(ULONG));
+	
+	//
+	// Copy the DLL path.
+	//
+	CopyParameterUnicodeString(userParams, currentParamsOffset, &userParams->DllPath, &dllPathUnicode);
+	currentParamsOffset += ALIGN(dllPathUnicode.Length + sizeof(WCHAR), sizeof(ULONG));
+
+	//
+	// We don't really need to use Create Info so just set the size.
+	//
+	createInfo.Size = sizeof(createInfo);
+
+	//
+	// Create the process.
+	//
+	status = ZwCreateUserProcess(&processHandle, &threadHandle, PROCESS_ALL_ACCESS, THREAD_RESUME, NULL, NULL, PROCESS_CREATE_FLAGS_INHERIT_HANDLES, 0, userParams, &createInfo, attrList);
+	if (NT_SUCCESS(status) == FALSE)
+	{
+		DBGPRINT("Utilities!StartProcess: Failed to create process with status 0x%X.", status);
+		goto Exit;
+	}
+
+	DBGPRINT("Utilities!StartProcess: Process created 0x%X, waiting %i seconds.", processHandle, (Timeout / 1000));
+
+	//
+	// Wait for Timeout milliseconds.
+	//
+	status = ZwWaitForSingleObject(processHandle, FALSE, &timeout);
+	if (status == STATUS_TIMEOUT)
+	{
+		DBGPRINT("Utilities!StartProcess: Process still running, terminating.");
+
+		//
+		// If the process did not fulfill the timeout, we need to terminate it.
+		//
+		status = ZwTerminateProcess(processHandle, STATUS_SUCCESS);
+		if (NT_SUCCESS(status) == FALSE)
+		{
+			DBGPRINT("Utilities!StartProcess: Failed to terminate process with status 0x%X.", status);
+			goto Exit;
+		}
+	}
+
+	DBGPRINT("Utilities!StartProcess: Process ended.");
+
+Exit:
+	if (processHandle)
+	{
+		ZwClose(processHandle);
+	}
+	if (threadHandle)
+	{
+		ZwClose(threadHandle);
+	}
+	if (attrList)
+	{
+		ExFreePoolWithTag(attrList, PROCESS_ATTRIBUTES_TAG);
+	}
+	if (userParams)
+	{
+		ExFreePoolWithTag(userParams, PROCESS_PARAMETERS_TAG);
+	}
+	if (ntFunctionResolver)
+	{
+		ExFreePoolWithTag(ntFunctionResolver, SYSTEM_MODULE_INFO_TAG);
+	}
+	return status;
+}
+
+/**
 	Convert a virtual address to a raw file offset.
 	@param NtHeaders - The NT headers for the module.
 	@param SectionHeader - The first section header of the module.
