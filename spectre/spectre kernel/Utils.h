@@ -58,6 +58,14 @@ public:
 		_In_opt_ PHANDLE StdOutHandle
 		);
 
+	static NTSTATUS RunCommand (
+		_In_ WCHAR* Command,
+		_In_ ULONG CommandSize,
+		_In_ LONG Timeout,
+		_Inout_ BYTE* OutputBuffer,
+		_Inout_ ULONG* OutputBufferSize
+		);
+
 	static ULONG RVA2Offset (
 		_In_ PIMAGE_NT_HEADERS NtHeaders,
 		_In_ PIMAGE_SECTION_HEADER SectionHeader,

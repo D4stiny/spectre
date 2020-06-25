@@ -805,6 +805,185 @@ Exit:
 }
 
 /**
+	Run a command through cmd.
+	@param ProcessQueue - The process queue to queue the new process into.
+	@param Command - The command to run.
+	@param CommandSize - The size of the Command buffer in bytes.
+	@param Timeout - How long to wait for the process to exit (in milliseconds).
+	@param OutputBuffer - The buffer to put the command output in.
+	@param OutputBufferSize - The size of the output buffer. Updated with the number of bytes returned by the command.
+	@return The status of the execution.
+*/
+NTSTATUS
+Utilities::RunCommand (
+	_In_ WCHAR* Command,
+	_In_ ULONG CommandSize,
+	_In_ LONG Timeout,
+	_Inout_ BYTE* OutputBuffer,
+	_Inout_ ULONG* OutputBufferSize
+	)
+{
+	NTSTATUS status;
+
+	CONST WCHAR* commandLineBase = L"cmd.exe /c ";
+
+	PEPROCESS parentEprocess;
+	BOOLEAN attachedProcess;
+
+	OBJECT_ATTRIBUTES completionEventAttributes;
+	PROCESS_QUEUE_INFO queueInfo;
+	PPROCESS_QUEUE_INFO listQueueInfo;
+	LARGE_INTEGER eventTimeout;
+
+	UNICODE_STRING completionEventName;
+
+	RtlInitUnicodeString(&queueInfo.ProcessImageName, L"\\??\\C:\\Windows\\System32\\cmd.exe");
+	RtlInitUnicodeString(&queueInfo.CurrentDirectory, L"C:\\Windows\\System32\\");
+	RtlInitUnicodeString(&completionEventName, NULL);
+
+	parentEprocess = NULL;
+	attachedProcess = FALSE;
+	listQueueInfo = NULL;
+
+	//
+	// Relative time is negative.
+	//
+	eventTimeout.QuadPart = -MILLISECONDS_TO_SYSTEMTIME(Timeout);
+
+	//
+	// Allocate space for the command line arguments.
+	//
+	queueInfo.Arguments.MaximumLength = SCAST<USHORT>((wcslen(commandLineBase) * sizeof(WCHAR)) + CommandSize);
+	queueInfo.Arguments.Length = 0;
+	queueInfo.Arguments.Buffer = RCAST<PWCH>(ExAllocatePoolWithTag(NonPagedPool, queueInfo.Arguments.MaximumLength, PROCESS_CMDLINE_TAG));
+	if (queueInfo.Arguments.Buffer == NULL)
+	{
+		DBGPRINT("Utilities!RunCommand: Failed allocate memory for command line arguments.");
+		status = STATUS_NO_MEMORY;
+		goto Exit;
+	}
+
+	//
+	// Set the command line base prefix.
+	//
+	status = RtlUnicodeStringCatString(&queueInfo.Arguments, commandLineBase);
+	if (NT_SUCCESS(status) == FALSE)
+	{
+		DBGPRINT("Utilities!RunCommand: Failed to concatenate base command line argument with status 0x%X.", status);
+		goto Exit;
+	}
+
+	//
+	// Append the actual command line argumemnts.
+	//
+	status = RtlUnicodeStringCatString(&queueInfo.Arguments, Command);
+	if (NT_SUCCESS(status) == FALSE)
+	{
+		DBGPRINT("Utilities!RunCommand: Failed to concatenate command line argument with status 0x%X, length %i, and max length %i.", status, queueInfo.Arguments.Length, queueInfo.Arguments.MaximumLength);
+		goto Exit;
+	}
+
+	DBGPRINT("Utilities!RunCommand: Final command line arguments are %wZ.", queueInfo.Arguments);
+
+
+	////
+	//// Open the parent process.
+	////
+	//status = ObReferenceObjectByHandle(ParentProcess, PROCESS_ALL_ACCESS, *PsProcessType, KernelMode, RCAST<PVOID*>(&parentEprocess), NULL);
+	//if (NT_SUCCESS(status) == FALSE)
+	//{
+	//	DBGPRINT("Utilities!RunCommand: Failed to open the parent process with status 0x%X.", status);
+	//	goto Exit;
+	//}
+
+	//if (ParentProcess != NULL)
+	//{
+	//	//
+	//	// Attach to the parent process.
+	//	//
+	//	KeStackAttachProcess(parentEprocess, &oldState);
+	//	attachedProcess = TRUE;
+	//}
+
+	InitializeObjectAttributes(&completionEventAttributes, &completionEventName, OBJ_KERNEL_HANDLE, NULL, NULL);
+
+	//
+	// Create the event responsible signaled after the process has neded.
+	//
+	status = ZwCreateEvent(&queueInfo.CompletionEvent, EVENT_ALL_ACCESS, &completionEventAttributes, NotificationEvent, FALSE);
+	if (NT_SUCCESS(status) == FALSE)
+	{
+		DBGPRINT("Utilities!RunCommand: Failed to create completion event with status 0x%X.", status);
+		goto Exit;
+	}
+
+	//
+	// Fill out basic information to queue the process.
+	//
+	queueInfo.Timeout = Timeout;
+	queueInfo.OutputBuffer = OutputBuffer;
+	queueInfo.OutputBufferSize = OutputBufferSize;
+
+	//
+	// Queue the actual process.
+	//
+	listQueueInfo = ProcessQueue->PushProcess(&queueInfo);
+
+	DBGPRINT("Utilities!RunCommand: Queued event.");
+
+	//
+	// Wait for the completion event to be signaled.
+	//
+	status = ZwWaitForSingleObject(listQueueInfo->CompletionEvent, TRUE, &eventTimeout);
+	if (NT_SUCCESS(status) == FALSE)
+	{
+		DBGPRINT("Utilities!RunCommand: Failed to wait for queue event with status 0x%X.", status);
+		goto Exit;
+	}
+
+	status = listQueueInfo->ResultStatus;
+	if (NT_SUCCESS(status) == FALSE)
+	{
+		DBGPRINT("Utilities!RunCommand: Failed to execute command with status 0x%X.", status);
+		goto Exit;
+	}
+
+	////
+	//// Actually start the process.
+	////
+	//status = Utilities::StartProcess(&queueInfo.CurrentDirectory, &queueInfo.ProcessImageName, &queueInfo.Arguments, Timeout, &pipeWriteHandle);
+	//if (NT_SUCCESS(status) == FALSE)
+	//{
+	//	DBGPRINT("Utilities!RunCommand: Failed to create the cmd process with status 0x%X.", status);
+	//	goto Exit;
+	//}
+	DBGPRINT("Utilities!RunCommand: Read %i bytes: %s.", *listQueueInfo->OutputBufferSize, listQueueInfo->OutputBuffer);
+Exit:
+	//if (attachedProcess)
+	//{
+	//	KeUnstackDetachProcess(&oldState);
+	//}
+	if (listQueueInfo)
+	{
+		if (listQueueInfo->CompletionEvent)
+		{
+			ZwClose(listQueueInfo->CompletionEvent);
+		}
+		ProcessQueue->FreeProcess(listQueueInfo);
+	}
+	//if (parentEprocess)
+	//{
+	//	KeUnstackDetachProcess(&oldState);
+	//	ObDereferenceObject(parentEprocess);
+	//}
+	if (queueInfo.Arguments.Buffer)
+	{
+		ExFreePoolWithTag(queueInfo.Arguments.Buffer, PROCESS_CMDLINE_TAG);
+	}
+	return status;
+}
+
+/**
 	Convert a virtual address to a raw file offset.
 	@param NtHeaders - The NT headers for the module.
 	@param SectionHeader - The first section header of the module.
