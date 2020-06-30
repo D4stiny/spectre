@@ -7,7 +7,10 @@
 #pragma once
 #include "common.h"
 #include "Module.h"
+#include "HelpModule.h"
 #include "ConfigurationWizardModule.h"
+#include "PingModule.h"
+#include "CommandModule.h"
 
 typedef class ModuleManager
 {

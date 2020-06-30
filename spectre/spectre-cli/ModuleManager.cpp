@@ -65,7 +65,22 @@ ModuleManager::DispatchToModule (
 	//
 	// Get ready for the if/else train!
 	//
-	selectedModule = new HelpModule(vectorArguments);
+	if (moduleName == "configure")
+	{
+		selectedModule = new ConfigurationWizardModule(vectorArguments);
+	}
+	else if (moduleName == "ping")
+	{
+		selectedModule = new PingModule(vectorArguments);
+	}
+	else if (moduleName == "command")
+	{
+		selectedModule = new CommandModule(vectorArguments);
+	}
+	else
+	{
+		selectedModule = new HelpModule(vectorArguments);
+	}
 
 	//
 	// Process the arguments.
