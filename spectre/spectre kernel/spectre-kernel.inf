@@ -1,5 +1,5 @@
 ;
-; spectrekernel.inf
+; spectre-kernel.inf
 ;
 
 [Version]
@@ -11,7 +11,7 @@ Class = "ActivityMonitor"
 ClassGuid = {b86dff51-a31e-4bac-b3cf-e8cfe75c9fc2}
 Provider    = %ManufacturerName%
 DriverVer   = 12/17/2019,1.0.0.0
-CatalogFile = spectrekernel.cat
+CatalogFile = spectre-kernel.cat
 
 [DestinationDirs]
 DefaultDestDir          = 12
@@ -70,7 +70,7 @@ HKR,"Instances\"%Instance1.Name%,"Flags",0x00010001,%Instance1.Flags%
 %DriverName%.sys
 
 [SourceDisksFiles]
-spectrekernel.sys = 1,,
+spectre-kernel.sys = 1,,
 
 [SourceDisksNames]
 1 = %DiskId1%,,,
@@ -82,7 +82,7 @@ spectrekernel.sys = 1,,
 ManufacturerName        = "Bill Demirkapi"
 ServiceDescription      = "Spectre Rootkit Driver"
 ServiceName             = "Spectre Rootkit"
-DriverName              = "spectrekernel"
+DriverName              = "spectre-kernel"
 DiskId1                 = "Spectre Rootkit Device Installation Disk"
 ;Instances specific information.
 DefaultInstance         = "Default Instance"

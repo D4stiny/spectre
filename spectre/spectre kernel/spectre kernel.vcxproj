@@ -26,31 +26,32 @@
     <Configuration>Debug</Configuration>
     <Platform Condition="'$(Platform)' == ''">Win32</Platform>
     <RootNamespace>spectre_kernel</RootNamespace>
+    <ProjectName>spectre-kernel</ProjectName>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
-    <TargetVersion>Windows10</TargetVersion>
+    <TargetVersion>Windows7</TargetVersion>
     <UseDebugLibraries>true</UseDebugLibraries>
     <PlatformToolset>WindowsKernelModeDriver10.0</PlatformToolset>
     <ConfigurationType>Driver</ConfigurationType>
     <DriverType>WDM</DriverType>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
-    <TargetVersion>Windows10</TargetVersion>
+    <TargetVersion>Windows7</TargetVersion>
     <UseDebugLibraries>false</UseDebugLibraries>
     <PlatformToolset>WindowsKernelModeDriver10.0</PlatformToolset>
     <ConfigurationType>Driver</ConfigurationType>
     <DriverType>WDM</DriverType>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
-    <TargetVersion>Windows10</TargetVersion>
+    <TargetVersion>Windows7</TargetVersion>
     <UseDebugLibraries>true</UseDebugLibraries>
     <PlatformToolset>WindowsKernelModeDriver10.0</PlatformToolset>
     <ConfigurationType>Driver</ConfigurationType>
     <DriverType>WDM</DriverType>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
-    <TargetVersion>Windows10</TargetVersion>
+    <TargetVersion>Windows7</TargetVersion>
     <UseDebugLibraries>false</UseDebugLibraries>
     <PlatformToolset>WindowsKernelModeDriver10.0</PlatformToolset>
     <ConfigurationType>Driver</ConfigurationType>
@@ -86,6 +87,7 @@
     </ClCompile>
     <Link>
       <AdditionalOptions>/INTEGRITYCHECK %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalDependencies>%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -95,11 +97,21 @@
     <Link />
     <Link>
       <AdditionalOptions>/INTEGRITYCHECK %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalDependencies>%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
+    <PostBuildEvent />
+    <PreBuildEvent>
+      <Command>
+      </Command>
+    </PreBuildEvent>
+    <PostBuildEvent>
+      <Command>"$(OutDir)\spectre-stager-util.exe" "$(TargetPath)" "$(SolutionDir)\spectre-stager\SpectreDriver.h"</Command>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <Link>
       <AdditionalOptions>/INTEGRITYCHECK %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalDependencies>%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <ClCompile>
       <EnablePREfast>true</EnablePREfast>
@@ -108,36 +120,57 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <Link>
       <AdditionalOptions>/INTEGRITYCHECK %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalDependencies>%(AdditionalDependencies)</AdditionalDependencies>
+      <GenerateDebugInformation>false</GenerateDebugInformation>
+      <Profile>false</Profile>
     </Link>
     <ClCompile>
       <EnablePREfast>true</EnablePREfast>
+      <DebugInformationFormat>
+      </DebugInformationFormat>
     </ClCompile>
+    <PostBuildEvent />
+    <PreBuildEvent>
+      <Command>
+      </Command>
+    </PreBuildEvent>
+    <PostBuildEvent>
+      <Command>"$(OutDir)\spectre-stager-util.exe" "$(TargetPath)" "$(SolutionDir)\spectre-stager\SpectreDriver.h"</Command>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <Inf Include="spectrekernel.inf" />
+    <Inf Include="spectre-kernel.inf" />
   </ItemGroup>
   <ItemGroup>
     <FilesToPackage Include="$(TargetPath)" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="AfdHook.cpp" />
+    <ClCompile Include="CommandPacketHandler.cpp" />
     <ClCompile Include="common.cpp" />
+    <ClCompile Include="CreateThreadHook.cpp" />
     <ClCompile Include="FileObjHook.cpp" />
+    <ClCompile Include="NtFunctionResolver.cpp" />
     <ClCompile Include="PacketDispatch.cpp" />
     <ClCompile Include="PacketHandler.cpp" />
     <ClCompile Include="PingPacketHandler.cpp" />
+    <ClCompile Include="ProcessQueue.cpp" />
     <ClCompile Include="spectre.cpp" />
     <ClCompile Include="Utils.cpp" />
     <ClCompile Include="XorPacketHandler.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="AfdHook.h" />
+    <ClInclude Include="CommandPacketHandler.h" />
     <ClInclude Include="common.h" />
+    <ClInclude Include="CreateThreadHook.h" />
     <ClInclude Include="FileObjHook.h" />
     <ClInclude Include="ntdef.h" />
+    <ClInclude Include="NtFunctionResolver.h" />
     <ClInclude Include="PacketHandler.h" />
     <ClInclude Include="PacketDispatch.h" />
     <ClInclude Include="PingPacketHandler.h" />
+    <ClInclude Include="ProcessQueue.h" />
     <ClInclude Include="shared.h" />
     <ClInclude Include="Utils.h" />
     <ClInclude Include="XorPacketHandler.h" />

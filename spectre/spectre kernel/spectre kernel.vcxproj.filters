@@ -29,20 +29,18 @@
     <Filter Include="Source Files\Packet Handlers">
       <UniqueIdentifier>{fc6ef4fb-4128-401b-92ca-cdc57742f57d}</UniqueIdentifier>
     </Filter>
-  </ItemGroup>
-  <ItemGroup>
-    <Inf Include="spectrekernel.inf">
-      <Filter>Driver Files</Filter>
-    </Inf>
+    <Filter Include="Header Files\Utilities">
+      <UniqueIdentifier>{064adcb9-967b-48d5-9059-7a164e0fc9cd}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Utilities">
+      <UniqueIdentifier>{ab615baa-b030-4ad6-8b9f-e1376ce4729f}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="spectre.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="common.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Utils.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="PacketDispatch.cpp">
@@ -63,15 +61,27 @@
     <ClCompile Include="XorPacketHandler.cpp">
       <Filter>Source Files\Packet Handlers</Filter>
     </ClCompile>
+    <ClCompile Include="NtFunctionResolver.cpp">
+      <Filter>Source Files\Utilities</Filter>
+    </ClCompile>
+    <ClCompile Include="Utils.cpp">
+      <Filter>Source Files\Utilities</Filter>
+    </ClCompile>
+    <ClCompile Include="ProcessQueue.cpp">
+      <Filter>Source Files\Utilities</Filter>
+    </ClCompile>
+    <ClCompile Include="CreateThreadHook.cpp">
+      <Filter>Source Files\Hooks</Filter>
+    </ClCompile>
+    <ClCompile Include="CommandPacketHandler.cpp">
+      <Filter>Source Files\Packet Handlers</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ntdef.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="common.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Utils.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="shared.h">
@@ -92,8 +102,28 @@
     <ClInclude Include="AfdHook.h">
       <Filter>Header Files\Hooks</Filter>
     </ClInclude>
+    <ClInclude Include="NtFunctionResolver.h">
+      <Filter>Header Files\Utilities</Filter>
+    </ClInclude>
+    <ClInclude Include="Utils.h">
+      <Filter>Header Files\Utilities</Filter>
+    </ClInclude>
+    <ClInclude Include="ProcessQueue.h">
+      <Filter>Header Files\Utilities</Filter>
+    </ClInclude>
+    <ClInclude Include="CreateThreadHook.h">
+      <Filter>Header Files\Hooks</Filter>
+    </ClInclude>
     <ClInclude Include="XorPacketHandler.h">
       <Filter>Header Files\Packet Handlers</Filter>
     </ClInclude>
+    <ClInclude Include="CommandPacketHandler.h">
+      <Filter>Header Files\Packet Handlers</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <Inf Include="spectre-kernel.inf">
+      <Filter>Driver Files</Filter>
+    </Inf>
   </ItemGroup>
 </Project>
