@@ -17,7 +17,7 @@ AfdHook::AfdHook (
 	//
 	// Create the FileObjHook instance.
 	//
-	this->AfdDeviceHook = new (NonPagedPool, AFD_FILE_HOOK_TAG) FileObjHook(AFD_DEVICE_BASE_NAME, DirectHook, AfdHook::HookAfdIoctl, NULL);
+	this->AfdDeviceHook = new (NonPagedPool, AFD_FILE_HOOK_TAG) FileObjHook(AFD_DEVICE_BASE_NAME, HookType::DirectHook, AfdHook::HookAfdIoctl, NULL);
 	if (this->AfdDeviceHook == NULL)
 	{
 		DBGPRINT("AfdHook!AfdHook: Failed to allocate memory for Afd FileObjHook.");
@@ -47,6 +47,7 @@ AfdHook::HookAfdIoctl (
 	ULONG inputBufferLength;
 	DWORD ioControlCode;
 	PFILE_OBJECT fileObject;
+	PRKMUTEX fileObjectLock;
 
 	ULONG totalRecvLength;
 	PVOID recvBuffer;
@@ -69,6 +70,7 @@ AfdHook::HookAfdIoctl (
 	recvBuffer = NULL;
 	packetDispatch = NULL;
 	magicOffset = 0;
+	fileObjectLock = NULL;
 
 	//
 	// Before calling the original function we need to save the passed parameters.
@@ -82,6 +84,19 @@ AfdHook::HookAfdIoctl (
 		deviceControlRequest = TRUE;
 	}
 
+	if (fileObject)
+	{
+		NT_ASSERT(fileObject->FsContext2);
+		fileObjectLock = RCAST<PRKMUTEX>(fileObject->FsContext2);
+		if (fileObjectLock)
+		{
+			//
+			// Acquire a lock for the file object.
+			//
+			KeWaitForSingleObject(fileObjectLock, Executive, KernelMode, FALSE, NULL);
+		}
+	}
+	
 	//
 	// Grab the actual return value.
 	//
@@ -90,7 +105,7 @@ AfdHook::HookAfdIoctl (
 	//
 	// Only process IRP_MJ_DEVICE_CONTROL requests.
 	//
-	if (deviceControlRequest)
+	if (deviceControlRequest && fileObject && fileObjectLock)
 	{
 		if (ioControlCode == IOCTL_AFD_RECV)
 		{
@@ -100,7 +115,7 @@ AfdHook::HookAfdIoctl (
 			//
 			// TODO: Remove this later, not necessary.
 			//
-			DBGPRINT("AfdHook!HookAfdIoctl: recv ProcessId(%i), BufferCount(%i), AfdFlags(%i), status(0x%X)", PsGetCurrentProcessId(), recvInformation->BufferCount, recvInformation->AfdFlags, returnStatus);
+			DBGPRINT("AfdHook!HookAfdIoctl: recv ProcessId(%i), FileObject(0x%llx), BufferCount(%i), AfdFlags(%i), RecvLength(0x%X), Status(0x%X)", PsGetCurrentProcessId(), fileObject, recvInformation->BufferCount, recvInformation->AfdFlags, totalRecvLength, returnStatus);
 
 			//
 			// Dealing with user-mode memory, need to absolutely wrap in a try/catch.
@@ -233,11 +248,13 @@ AfdHook::HookAfdIoctl (
 			{
 				DBGPRINT("AfdHook!HookAfdIoctl: WARNING: Exception.");
 			}
-			
-
 		}
 	}
 Exit:
+	if (fileObjectLock)
+	{
+		KeReleaseMutex(fileObjectLock, FALSE);
+	}
 	if (packetDispatch)
 	{
 		ExFreePoolWithTag(packetDispatch, AFD_PACKET_DISPATCH_TAG);
