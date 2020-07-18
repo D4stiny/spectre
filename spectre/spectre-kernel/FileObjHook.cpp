@@ -16,7 +16,6 @@ PDEVICE_OBJECT FileObjHook::OriginalDeviceObject;
 PDEVICE_OBJECT FileObjHook::FakeDeviceObject;
 PFAST_IO_DISPATCH FileObjHook::HookFastIoTable;
 FAST_IO_DISPATCH FileObjHook::OriginalFastIo;
-WCHAR FileObjHook::TargetDevice[MAX_PATH];
 
 //
 // Represents the current hook object needed by the dispatch function.
@@ -25,13 +24,13 @@ PFILE_OBJ_HOOK CurrentObjHook;
 
 /**
 	Initialize the FileObjHook class.
-	@param TargetDeviceName - The name of the target device to hook.
+	@param TargetDeviceObject - Pointer to the device to target.
 	@param Type - Method of hooking.
 	@param MajorFunctionHook - The function to redirect each MajorFunction to.
 	@param FastIoHook - Optional hooks for the FastIo dispatch table.
 */
 FileObjHook::FileObjHook (
-	_In_ PWCHAR TargetDeviceName,
+	_In_ PDEVICE_OBJECT TargetDeviceObject,
 	_In_ HOOK_TYPE Type,
 	_In_ HOOK_DISPATCH MajorFunctionHook,
 	_In_opt_ PFAST_IO_DISPATCH FastIoHook
@@ -63,9 +62,9 @@ FileObjHook::FileObjHook (
 	}
 	
 	//
-	// Copy the target device name.
+	// Set the original device object.
 	//
-	wcscpy_s(TargetDevice, TargetDeviceName);
+	this->OriginalDeviceObject = TargetDeviceObject;
 
 	//
 	// Retrieve the ntoskrnl module.
@@ -88,109 +87,62 @@ FileObjHook::FileObjHook (
 }
 
 /**
-	Check if a Handle in a Process is for a FILE_OBJECT.
-	@param Process - The process the handle belongs to.
-	@param Handle - The handle to check.
-	@return Whether or not Handle is for a FILE_OBJECT.
+	Check if a Object is a FILE_OBJECT.
+	@param Object - The object to check.
+	@param ObjectTypeNumber - The type index for the object.
+	@return TRUE if Object is a FILE_OBJECT, otherwise FALSE.
 */
 BOOLEAN
-FileObjHook::IsHandleFile (
-	_In_ PEPROCESS Process,
-	_In_ HANDLE Handle
+FileObjHook::IsFileObject (
+	_In_ PVOID Object,
+	_In_ BYTE ObjectTypeNumber
 	)
 {
-	NTSTATUS status;
-	BOOLEAN isFileObject;
-	POBJECT_TYPE_INFORMATION objectType;
-	ULONG objectTypeSize;
-	KAPC_STATE apcState;
+	POBJECT_TYPE objectType;
+	static BYTE fileObjectTypeNumber = 0;
 
-	isFileObject = FALSE;
-	objectTypeSize = 0;
-	objectType = NULL;
-
-	//
-	// Attach to the target process to query the handle's type.
-	//
-	KeStackAttachProcess(Process, &apcState);
-
-	//
-	// Query the appropriate size for the handle's type object.
-	//
-	status = ZwQueryObject(Handle, ObjectTypeInformation, NULL, 0, &objectTypeSize);
-
-	//
-	// The status should always be STATUS_INFO_LENGTH_MISMATCH because
-	// we provide insufficient data. Otherwise a bad handle.
-	//
-	if (status != STATUS_INFO_LENGTH_MISMATCH || objectTypeSize == 0)
+	if (fileObjectTypeNumber == 0)
 	{
-		//DBGPRINT("FileObjHook!IsHandleFile: Received object type size %i with status 0x%X.", objectTypeSize, status);
-		goto Exit;
-	}
+		//
+		// We generally want to use the object type number,
+		// but until we know it, we need to query the object type.
+		//
+		objectType = ObGetObjectType(Object);
+		if (objectType == NULL)
+		{
+			DBGPRINT("FileObjHook!IsFileObject: Failed to query object type.");
+			return FALSE;
+		}
 
-	objectTypeSize += sizeof(ULONG_PTR);
-
-	//
-	// Allocate the appropriate type information.
-	//
-	objectType = RCAST<POBJECT_TYPE_INFORMATION>(ExAllocatePoolWithTag(PagedPool, objectTypeSize, OBJECT_TYPE_TAG));
-	if (objectType == NULL)
-	{
-		DBGPRINT("FileObjHook!IsHandleFile: Failed to allocate %i bytes for object type size.", objectTypeSize);
-		goto Exit;
-	}
-	memset(objectType, 0, objectTypeSize);
-
-	//
-	// Query the object type.
-	//
-	status = ZwQueryObject(Handle, ObjectTypeInformation, objectType, objectTypeSize, &objectTypeSize);
-
-	//
-	// Check if the query was successful.
-	//
-	if (NT_SUCCESS(status) == FALSE)
-	{
-		//DBGPRINT("FileObjHook!IsHandleFile: Failed to query object type information with status 0x%X.", status);
-		goto Exit;
+		//
+		// If the object is a FILE_OBJECT...
+		//
+		if (objectType == *IoFileObjectType)
+		{
+			//
+			// Set the static file object type number
+			// now that we have a confirmed file object.
+			//
+			fileObjectTypeNumber = ObjectTypeNumber;
+			return TRUE;
+		}
+		return FALSE;
 	}
 
 	//
-	// Basic sanity check.
+	// File objects should have the same
+	// type number.
 	//
-	if (objectType->Name.Buffer == NULL)
-	{
-		goto Exit;
-	}
-
-	//
-	// Check if the object type is a file object.
-	//
-	if (wcscmp(objectType->Name.Buffer, L"File") != 0)
-	{
-		goto Exit;
-	}
-
-	isFileObject = TRUE;
-Exit:
-	if (objectType)
-	{
-		ExFreePoolWithTag(objectType, OBJECT_TYPE_TAG);
-	}
-	KeUnstackDetachProcess(&apcState);
-	return isFileObject;
+	return fileObjectTypeNumber == ObjectTypeNumber;
 }
 
 /**
 	Search for handles to a file object and hook objects that match TargetDeviceName.
-	@param TargetDeviceName - The name of the target device to hook.
 	@param HookCount - Caller-allocated variable to store the number of hooks placed by the function.
 	@return Whether hooking was successful.
 */
 BOOLEAN
 FileObjHook::SearchAndHook (
-	_In_ PWCHAR TargetDeviceName,
 	_Inout_ ULONG* HookCount
 	)
 {
@@ -199,9 +151,7 @@ FileObjHook::SearchAndHook (
 	ULONG systemHandleInformationSize;
 	ULONG i;
 	SYSTEM_HANDLE currentSystemHandle;
-	PEPROCESS currentProcess;
 	PFILE_OBJECT currentFileObject;
-	POBJECT_HEADER_NAME_INFO fileDeviceName;
 
 	UNREFERENCED_PARAMETER(HookType);
 
@@ -252,8 +202,7 @@ FileObjHook::SearchAndHook (
 		//
 		// Perform basic handle validation.
 		//
-		if (currentSystemHandle.Object == NULL ||
-			NT_SUCCESS(PsLookupProcessByProcessId(RCAST<HANDLE>(currentSystemHandle.ProcessId), &currentProcess)) == FALSE)
+		if (currentSystemHandle.Object == NULL)
 		{
 			continue;
 		}
@@ -261,7 +210,7 @@ FileObjHook::SearchAndHook (
 		//
 		// Skip non-FILE_OBJECT handles.
 		//
-		if (IsHandleFile(currentProcess, RCAST<HANDLE>(currentSystemHandle.Handle)) == FALSE)
+		if (IsFileObject(currentSystemHandle.Object, currentSystemHandle.ObjectTypeNumber) == FALSE)
 		{
 			continue;
 		}
@@ -269,37 +218,19 @@ FileObjHook::SearchAndHook (
 		currentFileObject = SCAST<PFILE_OBJECT>(currentSystemHandle.Object);
 
 		//
-		// Sanity checks.
+		// TODO: Add a try/catch wrapper around the following to prevent race condition issues.
+		// For now, do not change anything to observe issues that occur without a try/catch.
 		//
-		if (MmIsAddressValid(currentFileObject) == FALSE)
-		{
-			DBGPRINT("FileObjHook!SearchAndHook: FILE_OBJECT 0x%llx is invalid.", currentFileObject);
-			continue;
-		}
 		if (currentFileObject->Size != sizeof(FILE_OBJECT))
 		{
 			DBGPRINT("FileObjHook!SearchAndHook: FILE_OBJECT 0x%llx has invalid size 0x%X.", currentFileObject, currentFileObject->Size);
 			continue;
 		}
-		if (MmIsAddressValid(currentFileObject->DeviceObject) == FALSE)
-		{
-			DBGPRINT("FileObjHook!SearchAndHook: FILE_OBJECT 0x%llx DEVICE_OBJECT 0x%llx is invalid.", currentFileObject, currentFileObject->DeviceObject);
-			continue;
-		}
-		//
-		// TODO: Add a try/catch wrapper around the following to prevent race condition issues.
-		// For now, do not change anything to observe issues that occur without a try/catch.
-		//
-
-		//
-		// Query the name of the associated DEVICE_OBJECT.
-		//
-		fileDeviceName = SCAST<POBJECT_HEADER_NAME_INFO>(ObQueryNameInfo(currentFileObject->DeviceObject));
 
 		//
 		// Check if this is the device we're after.
 		//
-		if (MmIsAddressValid(fileDeviceName) && MmIsAddressValid(fileDeviceName->Name.Buffer) && currentFileObject->DeviceObject->DriverObject && wcsstr(fileDeviceName->Name.Buffer, TargetDeviceName) != NULL)
+		if (currentFileObject->DeviceObject == FileObjHook::OriginalDeviceObject)
 		{
 			//DBGPRINT("FileObjHook!SearchAndHook: Found a target device with name %wZ and device object 0x%llx, hooking.", fileDeviceName->Name, currentFileObject->DeviceObject);
 			if (this->HookFileObject(currentFileObject) == FALSE)
@@ -576,9 +507,8 @@ FileObjHook::HookFileObject (
 	//
 	// If we hit this assert, it means we're hooking a different device which should never happen.
 	//
-	NT_ASSERT(FileObjHook::OriginalDeviceObject == NULL || FileObjHook::OriginalDeviceObject == oldDeviceObject);
+	NT_ASSERT(FileObjHook::OriginalDeviceObject == oldDeviceObject);
 
-	FileObjHook::OriginalDeviceObject = oldDeviceObject;
 	return TRUE;
 }
 
@@ -609,7 +539,7 @@ FileObjHook::RehookThread (
 		//
 		// Search for new objects and hook those as well.
 		//
-		CurrentObjHook->SearchAndHook(FileObjHook::TargetDevice, &hookCount);
+		CurrentObjHook->SearchAndHook(&hookCount);
 
 		//
 		// Sleep for designated time.

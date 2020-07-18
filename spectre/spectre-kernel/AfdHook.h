@@ -33,11 +33,11 @@ typedef class AfdHook
 	PFILE_OBJ_HOOK AfdDeviceHook;
 public:
 	AfdHook (
-		VOID
+		_In_ PNTSTATUS Status
 		);
 } AFD_HOOK, *PAFD_HOOK;
 
-#define AFD_DEVICE_BASE_NAME L"Afd"
+#define AFD_DEVICE_NAME L"\\Device\\Afd"
 #define AFD_HOOK_TAG DEFINE_TAG('hApS')
 #define AFD_FILE_HOOK_TAG DEFINE_TAG('hFpS')
 #define AFD_PACKET_DISPATCH_TAG DEFINE_TAG('dPpS')

@@ -20,6 +20,10 @@
 //
 #define PACKET_MAGIC 0xDEADBEEF
 //
+// The type of variable to use for the PACKET_MAGIC.
+//
+#define PACKET_MAGIC_TYPE ULONG
+//
 // The maximum number of bytes a packet can contain. If over this limit, the packet wont be scanned for the PACKET_MAGIC.
 //
 #define PACKET_MAX_SIZE 0x1000
@@ -39,7 +43,7 @@ typedef struct _BASE_PACKET
 
 typedef struct _MAGIC_BASE_PACKET
 {
-	ULONG Magic;		// Indicates that the packet is malicious.
+	PACKET_MAGIC_TYPE Magic;		// Indicates that the packet is malicious.
 	BASE_PACKET Base;	// Contains standard information about the packet.
 } MAGIC_BASE_PACKET, *PMAGIC_BASE_PACKET;
 

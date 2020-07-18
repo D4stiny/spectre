@@ -42,13 +42,12 @@ typedef class FileObjHook
 		_In_ PFILE_OBJECT FileObject
 		);
 
-	BOOLEAN IsHandleFile (
-		_In_ PEPROCESS Process,
-		_In_ HANDLE Handle
+	BOOLEAN IsFileObject (
+		_In_ PVOID Object,
+		_In_ BYTE ObjectTypeNumber
 		);
 
 	BOOLEAN SearchAndHook (
-		_In_ PWCHAR TargetDeviceName,
 		_Inout_ ULONG* HookCount
 		);
 
@@ -89,10 +88,6 @@ typedef class FileObjHook
 	// The functions to redirect FastIo operations to.
 	//
 	static PFAST_IO_DISPATCH HookFastIoTable;
-	//
-	// The name of the device object to hook.
-	//
-	static WCHAR TargetDevice[MAX_PATH];
 public:
 	//
 	// Whether or not there is an ongoing hook.
@@ -104,7 +99,7 @@ public:
 	static FAST_IO_DISPATCH OriginalFastIo;
 
 	FileObjHook (
-		_In_ PWCHAR TargetDeviceName,
+		_In_ PDEVICE_OBJECT TargetDeviceObject,
 		_In_ HOOK_TYPE Type,
 		_In_ HOOK_DISPATCH MajorFunctionHook,
 		_In_ PFAST_IO_DISPATCH FastIoHook

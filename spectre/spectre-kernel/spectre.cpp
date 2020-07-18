@@ -56,7 +56,7 @@ DriverEntry (
 	
 	ProcessDispatchQueue = new (NonPagedPool, PROCESS_QUEUE_TAG) ProcessQueue();
 	ThreadHook = new (NonPagedPool, CREATE_THREAD_HOOK_TAG) CreateThreadHook(ProcessDispatchQueue, &status);
-	AfdDeviceHook = new (NonPagedPool, AFD_HOOK_TAG) AfdHook();
+	AfdDeviceHook = new (NonPagedPool, AFD_HOOK_TAG) AfdHook(&status);
 
 //Exit:
 	DBGPRINT("INITIALIZED WITH STATUS 0x%X.", status);

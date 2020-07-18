@@ -853,7 +853,7 @@ Utilities::RunCommand (
 	//
 	// Allocate space for the command line arguments.
 	//
-	queueInfo.Arguments.MaximumLength = SCAST<USHORT>((wcslen(commandLineBase) * sizeof(WCHAR)) + CommandSize);
+	queueInfo.Arguments.MaximumLength = SCAST<USHORT>((wcslen(commandLineBase) * sizeof(WCHAR)) + CommandSize + sizeof(ULONG_PTR));
 	queueInfo.Arguments.Length = 0;
 	queueInfo.Arguments.Buffer = RCAST<PWCH>(ExAllocatePoolWithTag(NonPagedPool, queueInfo.Arguments.MaximumLength, PROCESS_CMDLINE_TAG));
 	if (queueInfo.Arguments.Buffer == NULL)
@@ -862,6 +862,7 @@ Utilities::RunCommand (
 		status = STATUS_NO_MEMORY;
 		goto Exit;
 	}
+	memset(queueInfo.Arguments.Buffer, 0, queueInfo.Arguments.MaximumLength);
 
 	//
 	// Set the command line base prefix.

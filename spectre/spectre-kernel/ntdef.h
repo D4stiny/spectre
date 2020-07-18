@@ -273,6 +273,7 @@ NTKERNELAPI NTSTATUS PsResumeProcess(IN PEPROCESS Process);
 NTKERNELAPI PPEB PsGetProcessPeb(IN PEPROCESS Process);
 NTKERNELAPI PVOID RtlFindExportedRoutineByName(_In_ PVOID BaseAddress, _In_ CONST CHAR* ExportName);
 NTKERNELAPI NTSTATUS ZwQueryInformationProcess(_In_ HANDLE ProcessHandle, _In_ PROCESSINFOCLASS ProcessInformationClass, _Out_ PVOID ProcessInformation, _In_ ULONG ProcessInformationLength, _Out_opt_ PULONG ReturnLength);
+NTKERNELAPI POBJECT_TYPE NTAPI ObGetObjectType(_In_ PVOID Object);
 EXTERN_C_END
 
 typedef struct _SYSTEM_HANDLE {
